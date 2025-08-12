@@ -3,6 +3,7 @@
 from datetime import date, datetime
 from enum import Enum
 from itertools import product
+from operator import or_
 import os
 from fastapi import FastAPI, Depends, Form, HTTPException, UploadFile, File
 from fastapi.responses import FileResponse
@@ -69,11 +70,22 @@ def on_startup():
 # --- Эндпоинты для Товаров (Products) ---
 
 
-@app.post("/products/", response_model=Product, summary="Добавить новый товар на склад", tags=["Товары"])
+@app.post("/products/", response_model=Product, summary="Добавить новый товар", tags=["Товары"])
 def create_product(product: Product, session: Session = Depends(get_session)):
     session.add(product)
     session.commit()
     session.refresh(product)
+
+    # Создаем запись в истории о поступлении
+    movement = StockMovement(
+        product_id=product.id,
+        quantity=product.stock_quantity,
+        type=MovementTypeEnum.INCOME,
+        stock_after=product.stock_quantity
+    )
+    session.add(movement)
+    session.commit()
+
     return product
 
 
@@ -83,45 +95,45 @@ class StockStatusFilter(str, Enum):
     OUT_OF_STOCK = "out_of_stock"
 
 
-@app.get("/products/", response_model=List[Product], summary="Получить список всех товаров с фильтрами", tags=["Товары"])
+class ProductPage(BaseModel):
+    total: int
+    items: List[Product]
+
+
+@app.get("/products/", response_model=ProductPage, summary="Получить список товаров (с фильтрами и пагинацией)", tags=["Товары"])
 def read_products(
     search: Optional[str] = None,
     stock_status: StockStatusFilter = StockStatusFilter.ALL,
+    page: int = Query(1, gt=0, description="Номер страницы"),
+    # Увеличил размер по умолчанию
+    size: int = Query(50, gt=0, le=200,
+                      description="Количество элементов на странице"),
     session: Session = Depends(get_session)
 ):
-    """
-    Возвращает список всех товаров на складе с возможностью поиска и фильтрации.
-    - search: Поиск по названию или артикулу.
-    - stock_status: Фильтрация по остаткам (all, low_stock, out_of_stock).
-    """
-    # Начинаем строить запрос
-    query = select(Product)
+    offset = (page - 1) * size
 
-    # Добавляем условие поиска, если он есть
+    query = select(Product)
     if search:
-        # Ищем по частичному совпадению в названии или артикулах
         query = query.where(
             (Product.name.ilike(f"%{search}%")) |
             (Product.internal_sku.ilike(f"%{search}%")) |
             (Product.supplier_sku.ilike(f"%{search}%"))
         )
-
-    # Добавляем условие фильтрации по остаткам
     if stock_status == StockStatusFilter.LOW_STOCK:
-        # Остаток меньше или равен минимальному порогу И ОДНОВРЕМЕННО больше нуля
-        query = query.where(
-            (Product.stock_quantity <= Product.min_stock_level) & (
-                Product.stock_quantity > 0)
-        )
+        query = query.where((Product.stock_quantity <= Product.min_stock_level) & (
+            Product.stock_quantity > 0))
     elif stock_status == StockStatusFilter.OUT_OF_STOCK:
-        # Остаток равен нулю
         query = query.where(Product.stock_quantity == 0)
 
-    # Выполняем итоговый запрос
-    products = session.exec(query).all()
-    return products
+    count_query = select(func.count()).select_from(query.subquery())
+    total_count = session.exec(count_query).one()
 
-# --- Эндпоинты для Работников (Workers) ---
+    # --- ИЗМЕНЕНИЕ ЗДЕСЬ: Добавляем сортировку по 'is_favorite' ---
+    paginated_query = query.offset(offset).limit(
+        size).order_by(Product.is_favorite.desc(), Product.name)
+    items = session.exec(paginated_query).all()
+
+    return ProductPage(total=total_count, items=items)
 
 
 @app.post("/workers/", response_model=Worker, summary="Добавить нового работника", tags=["Работники"])
@@ -267,6 +279,7 @@ def get_worker_stock(worker_id: int, session: Session = Depends(get_session)):
 class EstimateItemCreate(BaseModel):
     product_id: int
     quantity: float
+    unit_price: Optional[float] = None  # <-- ДОБАВЬТЕ ЭТУ СТРОКУ
 
 
 class EstimateCreate(BaseModel):
@@ -480,41 +493,58 @@ def update_contract(contract_id: int, contract_update: ContractUpdate, session: 
     return db_contract
 
 
-@app.post("/contracts/{contract_id}/write-off-pipes", summary="Списать трубы по договору", tags=["Договоры"])
-def write_off_pipes_for_contract(contract_id: int, session: Session = Depends(get_session)):
+@app.post("/contracts/{contract_id}/write-off-pipes", response_model=Contract, summary="Списать трубы и ЗАВЕРШИТЬ договор", tags=["Договоры"])
+def write_off_pipes_and_complete_contract(contract_id: int, session: Session = Depends(get_session)):
     contract = session.get(Contract, contract_id)
     if not contract:
         raise HTTPException(status_code=404, detail="Договор не найден")
+
+    # Проверяем, что есть что списывать
+    if not contract.pipe_steel_used and not contract.pipe_plastic_used:
+        raise HTTPException(
+            status_code=400, detail="Не указано количество использованных труб для списания.")
+
     messages = []
-    pipe_skus = {"PIPE-STEEL-DRILL": contract.pipe_steel_used,
-                 "PIPE-PLASTIC-DRILL": contract.pipe_plastic_used}
-    for sku, qty in pipe_skus.items():
+    pipe_skus_map = {"PIPE-STEEL-DRILL": contract.pipe_steel_used,
+                     "PIPE-PLASTIC-DRILL": contract.pipe_plastic_used}
+
+    for sku_anchor, qty in pipe_skus_map.items():
         if qty and qty > 0:
-            product = session.exec(select(Product).where(
-                Product.internal_sku == sku)).first()
+            # ... (логика поиска и списания труб остается БЕЗ ИЗМЕНЕНИЙ, как в прошлом ответе)
+            product_query = select(Product).where(or_(func.trim(Product.internal_sku) == sku_anchor.strip(
+            ), func.trim(Product.supplier_sku) == sku_anchor.strip()))
+            product = session.exec(product_query).first()
             if not product:
                 raise HTTPException(
-                    status_code=404, detail=f"Товар с артикулом {sku} не найден.")
+                    status_code=404, detail=f"Товар с 'якорным' артикулом '{sku_anchor}' не найден.")
             if product.stock_quantity < qty:
                 raise HTTPException(
-                    status_code=400, detail=f"Недостаточно {product.name}. В наличии: {product.stock_quantity}, требуется: {qty}")
-
+                    status_code=400, detail=f"Недостаточно '{product.name}'.")
             product.stock_quantity -= qty
-
-            movement = StockMovement(
-                product_id=product.id,
-                quantity=-qty,
-                type=MovementTypeEnum.WRITE_OFF_CONTRACT,
-                stock_after=product.stock_quantity  # <-- ИЗМЕНЕНИЕ
-            )
+            movement = StockMovement(product_id=product.id, quantity=-qty,
+                                     type=MovementTypeEnum.WRITE_OFF_CONTRACT, stock_after=product.stock_quantity)
             session.add(product)
             session.add(movement)
-            messages.append(f"Списано {product.name}: {qty} м.")
+            messages.append(f"Списано '{product.name}': {qty} м.")
 
     if not messages:
-        return {"message": "В договоре не указано количество труб для списания."}
+        raise HTTPException(
+            status_code=400, detail="Не указано количество труб для списания > 0.")
+
+    # --- НОВАЯ ЛОГИКА: АВТОМАТИЧЕСКАЯ СМЕНА СТАТУСА ---
+    contract.status = ContractStatusEnum.COMPLETED
+    session.add(contract)
+
     session.commit()
-    return {"status": "success", "details": messages}
+    session.refresh(contract)
+
+    # Возвращаем обновленный объект договора
+    return contract
+
+
+class ProductPage(BaseModel):
+    total: int
+    items: List[Product]
 
 
 class ProductUpdate(BaseModel):
@@ -531,14 +561,25 @@ class ProductUpdate(BaseModel):
 
 @app.patch("/products/{product_id}", response_model=Product, summary="Обновить товар", tags=["Товары"])
 def update_product(product_id: int, product_update: ProductUpdate, session: Session = Depends(get_session)):
-    """Обновляет данные товара по его ID."""
     db_product = session.get(Product, product_id)
     if not db_product:
         raise HTTPException(status_code=404, detail="Товар не найден")
 
+    old_quantity = db_product.stock_quantity
     update_data = product_update.model_dump(exclude_unset=True)
     for key, value in update_data.items():
         setattr(db_product, key, value)
+
+    # Если остаток изменился, создаем корректирующую запись
+    if 'stock_quantity' in update_data and old_quantity != update_data['stock_quantity']:
+        quantity_diff = update_data['stock_quantity'] - old_quantity
+        movement = StockMovement(
+            product_id=db_product.id,
+            quantity=quantity_diff,
+            type=MovementTypeEnum.ADJUSTMENT,
+            stock_after=db_product.stock_quantity
+        )
+        session.add(movement)
 
     session.add(db_product)
     session.commit()
@@ -546,7 +587,10 @@ def update_product(product_id: int, product_update: ProductUpdate, session: Sess
     return db_product
 
 
-@app.delete("/products/{product_id}", status_code=204, summary="Удалить товар", tags=["Товары"])
+DELETED_PRODUCTS_CACHE = {}
+
+
+@app.delete("/products/{product_id}", summary="Удалить товар", tags=["Товары"])
 def delete_product(product_id: int, session: Session = Depends(get_session)):
     """Удаляет товар по его ID."""
     product = session.get(Product, product_id)
@@ -560,9 +604,25 @@ def delete_product(product_id: int, session: Session = Depends(get_session)):
         raise HTTPException(
             status_code=400, detail="Нельзя удалить товар, так как по нему есть движения в истории. Сначала удалите связанные движения.")
 
+    # Сохраняем во временный кеш
+    DELETED_PRODUCTS_CACHE[product_id] = product.model_dump()
     session.delete(product)
     session.commit()
-    return None  # При статусе 204 тело ответа должно быть пустым
+    return {"message": "Товар удален", "product_id": product_id}
+
+
+@app.post("/products/restore/{product_id}", summary="Восстановить товар", tags=["Товары"])
+def restore_product(product_id: int, session: Session = Depends(get_session)):
+    if product_id in DELETED_PRODUCTS_CACHE:
+        product_data = DELETED_PRODUCTS_CACHE.pop(product_id)
+        # Убираем id, чтобы база данных сгенерировала новый
+        product_data.pop('id', None)
+        new_product = Product.model_validate(product_data)
+        session.add(new_product)
+        session.commit()
+        return new_product
+    raise HTTPException(
+        status_code=404, detail="Товар для восстановления не найден в кеше.")
 
 
 @app.post("/actions/clear-all-data/", summary="!!! ОПАСНО: Удалить ВСЕ данные !!!", tags=["_Служебное_"])
@@ -968,39 +1028,58 @@ class EstimateUpdate(BaseModel):
     # Позволяем обновить ВЕСЬ список товаров
     items: Optional[List[EstimateItemCreate]] = None
 
-# --- ДОБАВЬТЕ ЭТОТ ЭНДПОИНТ ПОСЛЕ GET /estimates/{id} ---
 
-
+# --- ЗАМЕНИТЕ ЭТУ ФУНКЦИЮ ЦЕЛИКОМ ---
 @app.patch("/estimates/{estimate_id}", response_model=Estimate, summary="Обновить смету", tags=["Сметы"])
 def update_estimate(estimate_id: int, request: EstimateUpdate, session: Session = Depends(get_session)):
+    """
+    Обновляет данные сметы. Позволяет менять 'шапку' и/или полностью
+    заменять состав товаров, если смета еще не отгружена.
+    """
     db_estimate = session.get(Estimate, estimate_id)
     if not db_estimate:
         raise HTTPException(status_code=404, detail="Смета не найдена")
 
-    # Обновляем простые поля "шапки"
+    if db_estimate.status == EstimateStatusEnum.COMPLETED:
+        raise HTTPException(
+            status_code=400, detail="Нельзя редактировать завершенную смету.")
+
+    # Запрещаем менять состав товаров, если смета уже в работе
+    if request.items is not None and db_estimate.status == EstimateStatusEnum.IN_PROGRESS:
+        raise HTTPException(
+            status_code=400, detail="Состав отгруженной сметы можно менять только через 'довыдачу'.")
+
+    # Обновляем поля "шапки"
     update_data = request.model_dump(exclude_unset=True)
     for key, value in update_data.items():
-        if key != "items":  # Поле items обрабатываем отдельно
+        if key != "items":
             setattr(db_estimate, key, value)
 
-    # Если в запросе пришел новый список товаров, полностью заменяем старый
+    # Полностью заменяем состав товаров, если он был передан и смета в нужном статусе
     if request.items is not None:
-        # 1. Удаляем все старые позиции
-        session.exec(delete(EstimateItem).where(
-            EstimateItem.estimate_id == estimate_id))
+        # --- ИСПРАВЛЕННАЯ ЛОГИКА УДАЛЕНИЯ ---
+        items_to_delete = session.exec(select(EstimateItem).where(
+            EstimateItem.estimate_id == estimate_id)).all()
+        for item in items_to_delete:
+            session.delete(item)
+        # --- КОНЕЦ ИСПРАВЛЕНИЯ ---
 
-        # 2. Добавляем новые
+        # Добавляем новые
         for item_data in request.items:
             product = session.get(Product, item_data.product_id)
             if not product:
                 raise HTTPException(
-                    status_code=404, detail=f"Товар с ID {item_data.product_id} не найден")
+                    status_code=404, detail=f"Товар ID {item_data.product_id} не найден.")
+
+            # --- ИСПРАВЛЕНИЕ: Проверяем наличие unit_price ---
+            unit_price = item_data.unit_price if hasattr(
+                item_data, 'unit_price') else product.retail_price
 
             new_item = EstimateItem(
                 estimate_id=estimate_id,
                 product_id=product.id,
                 quantity=item_data.quantity,
-                unit_price=product.retail_price
+                unit_price=unit_price
             )
             session.add(new_item)
 
@@ -1038,6 +1117,134 @@ def delete_estimate(estimate_id: int, session: Session = Depends(get_session)):
 
     session.commit()
     return None
+
+
+@app.patch("/estimates/{estimate_id}/items/{item_id}", response_model=EstimateItem, summary="Обновить позицию в смете", tags=["Сметы"])
+def update_estimate_item(estimate_id: int, item_id: int, quantity: float = Query(..., gt=0), session: Session = Depends(get_session)):
+    item = session.get(EstimateItem, item_id)
+    if not item or item.estimate_id != estimate_id:
+        raise HTTPException(status_code=404, detail="Позиция сметы не найдена")
+
+    item.quantity = quantity
+    session.add(item)
+    session.commit()
+    session.refresh(item)
+    return item
+
+
+@app.delete("/estimates/{estimate_id}/items/{item_id}", status_code=204, summary="Удалить позицию из сметы", tags=["Сметы"])
+def delete_estimate_item(estimate_id: int, item_id: int, session: Session = Depends(get_session)):
+    item = session.get(EstimateItem, item_id)
+    if not item or item.estimate_id != estimate_id:
+        raise HTTPException(status_code=404, detail="Позиция сметы не найдена")
+
+    session.delete(item)
+    session.commit()
+    return None
+
+
+class AddItemsRequest(BaseModel):
+    items: List[EstimateItemCreate]
+
+
+@app.post("/estimates/{estimate_id}/issue-additional", summary="[Новая логика] Довыдача товаров по смете", tags=["Сметы"])
+def issue_additional_items(estimate_id: int, request: AddItemsRequest, session: Session = Depends(get_session)):
+    """
+    Добавляет новые позиции в смету и СРАЗУ ЖЕ списывает их на работника,
+    привязанного к этой смете.
+    """
+    estimate = session.get(Estimate, estimate_id)
+    if not estimate:
+        raise HTTPException(status_code=404, detail="Смета не найдена")
+    if not estimate.worker_id:
+        raise HTTPException(
+            status_code=400, detail="Смета еще не отгружена, нельзя сделать довыдачу.")
+
+    worker = session.get(Worker, estimate.worker_id)
+
+    for item_data in request.items:
+        product = session.get(Product, item_data.product_id)
+        if not product:
+            raise HTTPException(
+                status_code=404, detail=f"Товар ID {item_data.product_id} не найден.")
+        if product.stock_quantity < item_data.quantity:
+            raise HTTPException(
+                status_code=400, detail=f"Недостаточно товара '{product.name}'.")
+
+        # 1. Уменьшаем остаток на основном складе
+        product.stock_quantity -= item_data.quantity
+
+        # 2. Создаем новую позицию в смете
+        new_item = EstimateItem(
+            estimate_id=estimate_id,
+            product_id=product.id,
+            quantity=item_data.quantity,
+            unit_price=item_data.unit_price
+        )
+        # 3. Создаем запись в истории о выдаче
+        movement = StockMovement(
+            product_id=product.id,
+            worker_id=worker.id,
+            quantity=-item_data.quantity,
+            type=MovementTypeEnum.ISSUE_TO_WORKER,
+            stock_after=product.stock_quantity
+        )
+        session.add(product)
+        session.add(new_item)
+        session.add(movement)
+
+    session.commit()
+    return {"message": "Товары успешно довыданы."}
+
+
+@app.post("/estimates/{estimate_id}/complete", summary="[Новая логика] Завершить и закрыть смету", tags=["Сметы"])
+def complete_estimate(estimate_id: int, session: Session = Depends(get_session)):
+    """
+    Переводит смету в статус 'Выполнена'. 
+    Рассчитывает фактический расход и создает операции 'Списание работником'.
+    """
+    estimate = session.get(Estimate, estimate_id)
+    if not estimate:
+        raise HTTPException(status_code=404, detail="Смета не найдена")
+    if estimate.status != EstimateStatusEnum.IN_PROGRESS:
+        raise HTTPException(
+            status_code=400, detail="Завершить можно только смету в статусе 'В работе'.")
+    if not estimate.worker_id:
+        raise HTTPException(
+            status_code=400, detail="К смете не привязан работник.")
+
+    # Получаем все товары, которые когда-либо были в этой смете
+    estimate_items = session.exec(select(EstimateItem).where(
+        EstimateItem.estimate_id == estimate_id)).all()
+
+    for item in estimate_items:
+        # Считаем баланс по этому товару у этого работника
+        balance_query = select(func.sum(StockMovement.quantity)).where(
+            StockMovement.worker_id == estimate.worker_id,
+            StockMovement.product_id == item.product_id
+        )
+        on_hand_sum = session.exec(balance_query).one_or_none() or 0
+        quantity_on_hand = -on_hand_sum
+
+        # Если после всех возвратов что-то осталось на руках - это и есть фактический расход
+        if quantity_on_hand > 0:
+            product = session.get(Product, item.product_id)
+            # Создаем операцию финального списания
+            write_off_movement = StockMovement(
+                product_id=item.product_id,
+                worker_id=estimate.worker_id,
+                quantity=quantity_on_hand,  # Положительное значение
+                type=MovementTypeEnum.WRITE_OFF_WORKER,
+                stock_after=product.stock_quantity  # Остаток на складе не меняется
+            )
+            session.add(write_off_movement)
+
+    # Меняем статус сметы
+    estimate.status = EstimateStatusEnum.COMPLETED
+    session.add(estimate)
+    session.commit()
+
+    return {"message": "Смета успешно завершена. Фактический расход списан с работников."}
 
 
 class WriteOffItemRequest(BaseModel):
@@ -1091,3 +1298,133 @@ def write_off_item_from_worker(request: WriteOffItemRequest, session: Session = 
     session.refresh(movement)
 
     return movement
+
+# --- Модели для Отчета ---
+
+
+class ProfitReportItem(BaseModel):
+    estimate_id: int
+    estimate_number: str
+    client_name: str
+    completed_at: date
+    total_retail: float
+    total_purchase: float
+    profit: float
+    margin: float
+
+
+class ProfitReportResponse(BaseModel):
+    items: List[ProfitReportItem]
+    grand_total_retail: float
+    grand_total_purchase: float
+    grand_total_profit: float
+    average_margin: float
+
+# --- Эндпоинт для Отчета ---
+
+
+@app.get("/reports/profit", response_model=ProfitReportResponse, summary="Отчет по прибыли (гибкий)", tags=["Отчеты"])
+def get_profit_report(
+    start_date: Optional[date] = None,
+    end_date: Optional[date] = None,
+    estimate_id: Optional[int] = None,  # Новый необязательный параметр
+    session: Session = Depends(get_session)
+):
+    """
+    Рассчитывает прибыль.
+    - Если передан estimate_id, ищет только по нему.
+    - Иначе, ищет по диапазону дат.
+    """
+
+    # Начинаем строить запрос
+    query = select(Estimate).where(
+        Estimate.status.in_([EstimateStatusEnum.COMPLETED,
+                            EstimateStatusEnum.IN_PROGRESS])
+    )
+
+    # Динамически добавляем фильтры
+    if estimate_id:
+        query = query.where(Estimate.id == estimate_id)
+    elif start_date and end_date:
+        query = query.where(
+            Estimate.created_at >= start_date,
+            Estimate.created_at < date(
+                end_date.year, end_date.month, end_date.day + 1)
+        )
+    else:
+        # Если не передан ни ID, ни даты, возвращаем пустой отчет
+        return ProfitReportResponse(items=[], grand_total_retail=0, grand_total_purchase=0, grand_total_profit=0, average_margin=0)
+
+    estimates = session.exec(query).all()
+
+    report_items = []
+    grand_total_retail = 0
+    grand_total_purchase = 0
+
+    for estimate in estimates:
+        total_retail = 0
+        total_purchase = 0
+
+        # Находим все фактически списанные товары по этой смете
+        # Это более точный подход, чем просто смотреть на состав сметы
+
+        # 1. Находим ID работника по смете
+        worker_id = estimate.worker_id
+        if not worker_id:
+            continue  # Пропускаем сметы без отгрузки
+
+        # 2. Суммируем все списания (WRITE_OFF) и выдачи (ISSUE), связанные с этим работником
+        # (Более точная логика потребует связи движения со сметой, пока упростим)
+
+        for item in estimate.items:
+            # Сумма продажи считается по цене, зафиксированной в смете
+            total_retail += item.quantity * item.unit_price
+
+            # Себестоимость считается по текущей закупочной цене товара в справочнике
+            product = session.get(Product, item.product_id)
+            if product:
+                total_purchase += item.quantity * product.purchase_price
+
+        profit = total_retail - total_purchase
+        margin = (profit / total_retail * 100) if total_retail > 0 else 0
+
+        report_items.append(ProfitReportItem(
+            estimate_id=estimate.id,
+            estimate_number=estimate.estimate_number,
+            client_name=estimate.client_name,
+            completed_at=estimate.created_at.date(),
+            total_retail=total_retail,
+            total_purchase=total_purchase,
+            profit=profit,
+            margin=margin
+        ))
+
+        grand_total_retail += total_retail
+        grand_total_purchase += total_purchase
+
+    grand_total_profit = grand_total_retail - grand_total_purchase
+    average_margin = (grand_total_profit / grand_total_retail *
+                      100) if grand_total_retail > 0 else 0
+
+    return ProfitReportResponse(
+        items=report_items,
+        grand_total_retail=grand_total_retail,
+        grand_total_purchase=grand_total_purchase,
+        grand_total_profit=grand_total_profit,
+        average_margin=average_margin
+    )
+
+# --- ДОБАВЬТЕ ЭТОТ НОВЫЙ ЭНДПОИНТ В СЕКЦИЮ "Товары" ---
+
+
+@app.patch("/products/{product_id}/toggle-favorite", response_model=Product, summary="Переключить статус 'Избранное' у товара", tags=["Товары"])
+def toggle_favorite(product_id: int, session: Session = Depends(get_session)):
+    product = session.get(Product, product_id)
+    if not product:
+        raise HTTPException(status_code=404, detail="Товар не найден")
+
+    product.is_favorite = not product.is_favorite  # Инвертируем значение
+    session.add(product)
+    session.commit()
+    session.refresh(product)
+    return product

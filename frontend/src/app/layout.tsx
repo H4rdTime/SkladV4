@@ -1,11 +1,11 @@
 // frontend/src/app/layout.tsx
-'use client';
+'use client'; 
 
 import { Inter } from "next/font/google";
 import "./globals.css";
 import Link from 'next/link';
-import { Toaster, toast } from 'react-hot-toast'; // Импортируем Toaster и toast
-import { Warehouse, Users, FileText, BookUser, Trash2, History, PackageCheck } from 'lucide-react';
+import { Toaster, toast } from 'react-hot-toast';
+import { Warehouse, Users, FileText, BookUser, Trash2, History, ClipboardList } from 'lucide-react'; // Добавили ClipboardList
 
 const inter = Inter({ subsets: ["latin"] });
 
@@ -28,7 +28,7 @@ export default function RootLayout({
           throw new Error(errorData.detail || 'Не удалось очистить базу данных');
         }
         toast.success('База данных успешно очищена. Перезагрузка...', { id: toastId });
-        setTimeout(() => window.location.reload(), 1500); // Небольшая задержка перед перезагрузкой
+        setTimeout(() => window.location.reload(), 1500);
       } catch (err: any) {
         toast.error(`Ошибка: ${err.message}`, { id: toastId });
       }
@@ -38,10 +38,9 @@ export default function RootLayout({
   return (
     <html lang="ru">
       <head>
-        <title>Система Учета "Склад v4"</title>
+          <title>Система Учета "Склад v4"</title>
       </head>
       <body className={`${inter.className} bg-gray-50`}>
-        {/* Контейнер для всплывающих уведомлений */}
         <Toaster position="bottom-right" toastOptions={{ duration: 5000 }} />
 
         <div className="flex h-screen">
@@ -71,8 +70,13 @@ export default function RootLayout({
                 <span>История</span>
               </Link>
               <Link href="/worker-stock" className="flex items-center gap-3 px-3 py-2 text-gray-700 rounded-md hover:bg-gray-100 transition-colors">
-                <PackageCheck size={20} />
+                <Users size={20} /> {/* Можно будет поменять иконку */}
                 <span>На руках</span>
+              </Link>
+              {/* --- НОВАЯ ССЫЛКА --- */}
+              <Link href="/reports" className="flex items-center gap-3 px-3 py-2 text-gray-700 rounded-md hover:bg-gray-100 transition-colors">
+                <ClipboardList size={20} />
+                <span>Отчеты</span>
               </Link>
             </nav>
             <div className="p-4 border-t">
@@ -85,7 +89,7 @@ export default function RootLayout({
               </button>
             </div>
           </aside>
-
+          
           <div className="flex-1 overflow-y-auto">
             {children}
           </div>
