@@ -27,7 +27,7 @@ class MovementTypeEnum(str, Enum):
     WRITE_OFF_ESTIMATE = "Списание по смете"
     WRITE_OFF_CONTRACT = "Списание по договору"
     ADJUSTMENT = "Корректировка"
-    WRITE_OFF_WORKER = "Списание работником" # <-- НОВЫЙ ТИП
+    WRITE_OFF_WORKER = "Списание работником"  # <-- НОВЫЙ ТИП
 # --- Основные модели таблиц ---
 
 
@@ -43,10 +43,10 @@ class Worker(SQLModel, table=True):
 class Product(SQLModel, table=True):
     """Таблица товаров на складе"""
     id: Optional[int] = Field(default=None, primary_key=True)
-    
+
     # --- НОВОЕ ПОЛЕ ---
     is_favorite: bool = Field(default=False, index=True)
-    
+    is_deleted: bool = Field(default=False, index=True)
     internal_sku: str = Field(unique=True, index=True)
     name: str
     supplier_sku: Optional[str] = Field(default=None, index=True)
@@ -55,7 +55,10 @@ class Product(SQLModel, table=True):
     retail_price: float = 0.0
     stock_quantity: float = 0.0
     min_stock_level: float = 0.0
-    stock_movements: List["StockMovement"] = Relationship(back_populates="product")
+    stock_movements: List["StockMovement"] = Relationship(
+        back_populates="product")
+
+
 class StockMovement(SQLModel, table=True):
     """Таблица истории всех движений товаров"""
     id: Optional[int] = Field(default=None, primary_key=True)

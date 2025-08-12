@@ -186,29 +186,31 @@ export default function WarehousePage() {
   };
 
   const handleDelete = async (productId: number) => {
-    if (!confirm('Вы уверены?')) return;
-
     // Оптимистично удаляем из списка
     const originalProducts = [...products];
     setProducts(products.filter(p => p.id !== productId));
+
+    const toastId = toast.loading('Удаление товара...');
 
     // Показываем уведомление с кнопкой отмены
     toast(
       (t) => (
         <div className="flex items-center gap-4">
-          <span>Товар удален.</span>
+          <span>Товар помечен как удаленный.</span>
           <button
             onClick={async () => {
-              toast.dismiss(t.id); // Закрываем это уведомление
+              toast.dismiss(t.id);
               const restoreToastId = toast.loading('Восстановление...');
               try {
-                const response = await fetch(`${API_URL}/products/restore/${productId}`, { method: 'POST' });
+                // --- ИЗМЕНЕНИЕ: Вызываем эндпоинт восстановления ---
+                const response = await fetch(`${API_URL}/products/${productId}/restore`, { method: 'POST' });
                 if (!response.ok) throw new Error("Не удалось восстановить");
                 toast.success("Товар восстановлен!", { id: restoreToastId });
                 forceRefresh();
               } catch (e) {
                 toast.error("Ошибка восстановления.", { id: restoreToastId });
-                setProducts(originalProducts); // Если что-то пошло не так, возвращаем как было
+                setProducts(originalProducts);
+                forceRefresh();
               }
             }}
             className="px-2 py-1 border rounded-md text-xs font-semibold"
@@ -217,20 +219,22 @@ export default function WarehousePage() {
           </button>
         </div>
       ),
-      { duration: 10000 } // Уведомление будет висеть 10 секунд
+      { duration: 10000, id: toastId } // Используем тот же ID, чтобы заменить "Загрузка..."
     );
 
     // Отправляем реальный запрос на удаление в фоне
     try {
       const response = await fetch(`${API_URL}/products/${productId}`, { method: 'DELETE' });
       if (!response.ok) {
-        // Если API вернул ошибку, откатываем изменения и показываем ошибку
         setProducts(originalProducts);
         toast.error("Не удалось удалить товар на сервере.");
+        toast.dismiss(toastId);
       }
+      // Уведомление об успехе не нужно, так как его уже заменил toast с кнопкой
     } catch (error) {
       setProducts(originalProducts);
       toast.error("Ошибка сети при удалении.");
+      toast.dismiss(toastId);
     }
   };
 

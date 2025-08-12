@@ -112,7 +112,7 @@ def read_products(
 ):
     offset = (page - 1) * size
 
-    query = select(Product)
+    query = select(Product).where(Product.is_deleted == False)
     if search:
         query = query.where(
             (Product.name.ilike(f"%{search}%")) |
@@ -128,7 +128,6 @@ def read_products(
     count_query = select(func.count()).select_from(query.subquery())
     total_count = session.exec(count_query).one()
 
-    # --- ИЗМЕНЕНИЕ ЗДЕСЬ: Добавляем сортировку по 'is_favorite' ---
     paginated_query = query.offset(offset).limit(
         size).order_by(Product.is_favorite.desc(), Product.name)
     items = session.exec(paginated_query).all()
@@ -590,39 +589,30 @@ def update_product(product_id: int, product_update: ProductUpdate, session: Sess
 DELETED_PRODUCTS_CACHE = {}
 
 
-@app.delete("/products/{product_id}", summary="Удалить товар", tags=["Товары"])
+@app.delete("/products/{product_id}", response_model=Product, summary="Пометить товар как удаленный", tags=["Товары"])
 def delete_product(product_id: int, session: Session = Depends(get_session)):
-    """Удаляет товар по его ID."""
     product = session.get(Product, product_id)
     if not product:
         raise HTTPException(status_code=404, detail="Товар не найден")
 
-    # Проверка, есть ли связанные записи, чтобы не нарушить целостность
-    has_movements = session.exec(select(StockMovement).where(
-        StockMovement.product_id == product_id)).first()
-    if has_movements:
-        raise HTTPException(
-            status_code=400, detail="Нельзя удалить товар, так как по нему есть движения в истории. Сначала удалите связанные движения.")
-
-    # Сохраняем во временный кеш
-    DELETED_PRODUCTS_CACHE[product_id] = product.model_dump()
-    session.delete(product)
+    product.is_deleted = True  # Просто помечаем, а не удаляем
+    session.add(product)
     session.commit()
-    return {"message": "Товар удален", "product_id": product_id}
+    session.refresh(product)
+    return product
 
 
-@app.post("/products/restore/{product_id}", summary="Восстановить товар", tags=["Товары"])
+@app.post("/products/{product_id}/restore", response_model=Product, summary="Восстановить товар", tags=["Товары"])
 def restore_product(product_id: int, session: Session = Depends(get_session)):
-    if product_id in DELETED_PRODUCTS_CACHE:
-        product_data = DELETED_PRODUCTS_CACHE.pop(product_id)
-        # Убираем id, чтобы база данных сгенерировала новый
-        product_data.pop('id', None)
-        new_product = Product.model_validate(product_data)
-        session.add(new_product)
-        session.commit()
-        return new_product
-    raise HTTPException(
-        status_code=404, detail="Товар для восстановления не найден в кеше.")
+    product = session.get(Product, product_id)
+    if not product:
+        raise HTTPException(status_code=404, detail="Товар не найден")
+
+    product.is_deleted = False  # Просто снимаем пометку
+    session.add(product)
+    session.commit()
+    session.refresh(product)
+    return product
 
 
 @app.post("/actions/clear-all-data/", summary="!!! ОПАСНО: Удалить ВСЕ данные !!!", tags=["_Служебное_"])
