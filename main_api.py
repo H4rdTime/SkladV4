@@ -2,9 +2,11 @@
 
 from datetime import date, datetime
 from enum import Enum
+from itertools import product
 import os
 from fastapi import FastAPI, Depends, Form, HTTPException, UploadFile, File
 from fastapi.responses import FileResponse
+from numpy import delete
 from sqlmodel import SQLModel, create_engine, Session, select
 from typing import List, Optional
 from pydantic import BaseModel
@@ -16,7 +18,9 @@ import re
 from docxtpl import DocxTemplate  # Добавлен импорт для DocxTemplate
 # Импортируем все наши модели
 from main_models import Product, Worker, StockMovement, MovementTypeEnum
-
+from fastapi.middleware.cors import CORSMiddleware
+import pandas as pd
+from fastapi import Query
 # --- Настройка подключения к базе данных ---
 DATABASE_URL = "postgresql://postgres.ebpejjvgdfddmjzacqfd:Transformers15832!?@aws-0-eu-central-1.pooler.supabase.com:5432/postgres"
 
@@ -35,6 +39,19 @@ app = FastAPI(
     description="API для управления складской системой."
 )
 
+# --- НАСТРОЙКА CORS ---
+# Список источников, которым разрешено делать запросы к нашему API
+origins = [
+    "http://localhost:3000",  # Адрес нашего Next.js фронтенда
+]
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=origins,  # Разрешить запросы от этих источников
+    allow_credentials=True,
+    allow_methods=["*"],    # Разрешить все методы (GET, POST, PATCH и т.д.)
+    allow_headers=["*"],    # Разрешить все заголовки
+)
 # Функция-зависимость для получения сессии БД
 
 
@@ -131,25 +148,18 @@ class IssueItemRequest(BaseModel):
 
 @app.post("/actions/issue-item/", response_model=StockMovement, summary="Выдать товар работнику", tags=["Операции"])
 def issue_item_to_worker(request: IssueItemRequest, session: Session = Depends(get_session)):
-    product = session.get(Product, request.product_id)
+    product, worker = session.get(
+        Product, request.product_id), session.get(Worker, request.worker_id)
     if not product:
-        raise HTTPException(
-            status_code=404, detail="Товар с таким ID не найден")
-
-    worker = session.get(Worker, request.worker_id)
+        raise HTTPException(status_code=404, detail="Товар не найден")
     if not worker:
-        raise HTTPException(
-            status_code=404, detail="Работник с таким ID не найден")
-
+        raise HTTPException(status_code=404, detail="Работник не найден")
     if request.quantity <= 0:
         raise HTTPException(
-            status_code=400, detail="Количество должно быть больше нуля")
-
+            status_code=400, detail="Количество должно быть > 0")
     if product.stock_quantity < request.quantity:
         raise HTTPException(
-            status_code=400,
-            detail=f"Недостаточно товара на складе. В наличии: {product.stock_quantity}, требуется: {request.quantity}"
-        )
+            status_code=400, detail=f"Недостаточно товара. В наличии: {product.stock_quantity}")
 
     product.stock_quantity -= request.quantity
 
@@ -157,16 +167,13 @@ def issue_item_to_worker(request: IssueItemRequest, session: Session = Depends(g
         product_id=request.product_id,
         worker_id=request.worker_id,
         quantity=-request.quantity,
-        type=MovementTypeEnum.ISSUE_TO_WORKER
+        type=MovementTypeEnum.ISSUE_TO_WORKER,
+        stock_after=product.stock_quantity  # <-- ИЗМЕНЕНИЕ
     )
-
     session.add(product)
     session.add(movement)
     session.commit()
-
-    session.refresh(product)
     session.refresh(movement)
-
     return movement
 
 
@@ -176,50 +183,31 @@ class ReturnItemRequest(BaseModel):
     quantity: float
 
 
-@app.post("/actions/return-item/", response_model=StockMovement, summary="Принять возврат товара от работника", tags=["Операции"])
+@app.post("/actions/return-item/", response_model=StockMovement, summary="Принять возврат от работника", tags=["Операции"])
 def return_item_from_worker(request: ReturnItemRequest, session: Session = Depends(get_session)):
-    """
-    Принимает возврат товара от работника и зачисляет его на склад.
-    1. Находит товар и работника по их ID.
-    2. Увеличивает количество товара на складе.
-    3. Создает запись в истории движений.
-    """
-    # 1. Находим товар и работника в базе данных
-    product = session.get(Product, request.product_id)
+    product, worker = session.get(
+        Product, request.product_id), session.get(Worker, request.worker_id)
     if not product:
-        raise HTTPException(
-            status_code=404, detail="Товар с таким ID не найден")
-
-    worker = session.get(Worker, request.worker_id)
+        raise HTTPException(status_code=404, detail="Товар не найден")
     if not worker:
-        raise HTTPException(
-            status_code=404, detail="Работник с таким ID не найден")
-
-    # Проверяем, что количество для возврата положительное
+        raise HTTPException(status_code=404, detail="Работник не найден")
     if request.quantity <= 0:
         raise HTTPException(
-            status_code=400, detail="Количество должно быть больше нуля")
+            status_code=400, detail="Количество должно быть > 0")
 
-    # 2. Увеличиваем количество товара на складе
     product.stock_quantity += request.quantity
 
-    # 3. Создаем запись в истории движений
     movement = StockMovement(
         product_id=request.product_id,
         worker_id=request.worker_id,
-        quantity=request.quantity,  # Возврат - это положительное количество
-        type=MovementTypeEnum.RETURN_FROM_WORKER
+        quantity=request.quantity,
+        type=MovementTypeEnum.RETURN_FROM_WORKER,
+        stock_after=product.stock_quantity  # <-- ИЗМЕНЕНИЕ
     )
-
-    # Сохраняем все изменения в одной транзакции
     session.add(product)
     session.add(movement)
     session.commit()
-
-    # Обновляем объекты
-    session.refresh(product)
     session.refresh(movement)
-
     return movement
 
 
@@ -233,7 +221,7 @@ class WorkerStockItem(BaseModel):
 @app.get("/actions/worker-stock/{worker_id}", response_model=List[WorkerStockItem], summary="Получить список товаров на руках у работника", tags=["Операции"])
 def get_worker_stock(worker_id: int, session: Session = Depends(get_session)):
     """
-    Рассчитывает и возвращает текущие остатки товаров, 
+    Рассчитывает и возвращает текущие остатки товаров,
     числящиеся за конкретным работником.
     """
     # Проверяем, существует ли такой работник
@@ -387,51 +375,38 @@ def read_estimate(estimate_id: int, session: Session = Depends(get_session)):
 
 
 @app.post("/estimates/{estimate_id}/ship", summary="Отгрузить товары по смете", tags=["Сметы"])
-def ship_estimate(estimate_id: int, worker_id: int, session: Session = Depends(get_session)):
-    """
-    Производит отгрузку: списывает все товары из сметы со склада на указанного работника.
-    Меняет статус сметы на "В работе".
-    """
-    estimate = session.get(Estimate, estimate_id)
+def ship_estimate(estimate_id: int, worker_id: int = Query(..., description="ID работника для отгрузки"), session: Session = Depends(get_session)):
+    estimate, worker = session.get(
+        Estimate, estimate_id), session.get(Worker, worker_id)
     if not estimate:
         raise HTTPException(status_code=404, detail="Смета не найдена")
-
-    worker = session.get(Worker, worker_id)
     if not worker:
         raise HTTPException(status_code=404, detail="Работник не найден")
-
-    if estimate.status != EstimateStatusEnum.DRAFT and estimate.status != EstimateStatusEnum.APPROVED:
+    if estimate.status not in [EstimateStatusEnum.DRAFT, EstimateStatusEnum.APPROVED]:
         raise HTTPException(
             status_code=400, detail=f"Нельзя отгрузить смету в статусе '{estimate.status.value}'")
 
-    # Проходим по всем позициям в смете
     for item in estimate.items:
         product = session.get(Product, item.product_id)
-
-        # Проверяем остаток
         if product.stock_quantity < item.quantity:
             raise HTTPException(
                 status_code=400, detail=f"Недостаточно товара '{product.name}'. В наличии: {product.stock_quantity}, требуется: {item.quantity}")
 
-        # Уменьшаем остаток
         product.stock_quantity -= item.quantity
 
-        # Создаем запись в истории
         movement = StockMovement(
             product_id=item.product_id,
             worker_id=worker.id,
             quantity=-item.quantity,
             type=MovementTypeEnum.ISSUE_TO_WORKER,
-            # TODO: Привязать ID сметы к движению
+            stock_after=product.stock_quantity  # <-- ИЗМЕНЕНИЕ
         )
         session.add(product)
         session.add(movement)
 
-    # Обновляем статус сметы и привязываем работника
     estimate.status = EstimateStatusEnum.IN_PROGRESS
     estimate.worker_id = worker.id
     session.add(estimate)
-
     session.commit()
 
     return {"message": f"Смета №{estimate.estimate_number} успешно отгружена на работника {worker.name}."}
@@ -507,76 +482,38 @@ def update_contract(contract_id: int, contract_update: ContractUpdate, session: 
 
 @app.post("/contracts/{contract_id}/write-off-pipes", summary="Списать трубы по договору", tags=["Договоры"])
 def write_off_pipes_for_contract(contract_id: int, session: Session = Depends(get_session)):
-    """
-    Списывает стальные и пластиковые трубы со склада на основании данных из договора.
-    Ищет товары по специальным внутренним артикулам.
-    """
     contract = session.get(Contract, contract_id)
     if not contract:
         raise HTTPException(status_code=404, detail="Договор не найден")
-
-    # Список для хранения сообщений о результате
     messages = []
+    pipe_skus = {"PIPE-STEEL-DRILL": contract.pipe_steel_used,
+                 "PIPE-PLASTIC-DRILL": contract.pipe_plastic_used}
+    for sku, qty in pipe_skus.items():
+        if qty and qty > 0:
+            product = session.exec(select(Product).where(
+                Product.internal_sku == sku)).first()
+            if not product:
+                raise HTTPException(
+                    status_code=404, detail=f"Товар с артикулом {sku} не найден.")
+            if product.stock_quantity < qty:
+                raise HTTPException(
+                    status_code=400, detail=f"Недостаточно {product.name}. В наличии: {product.stock_quantity}, требуется: {qty}")
 
-    # --- Списание стальной трубы ---
-    if contract.pipe_steel_used and contract.pipe_steel_used > 0:
-        # Ищем товар "Стальная труба" по его уникальному артикулу
-        steel_pipe_product = session.exec(select(Product).where(
-            Product.internal_sku == "PIPE-STEEL-DRILL")).first()
+            product.stock_quantity -= qty
 
-        if not steel_pipe_product:
-            raise HTTPException(
-                status_code=404, detail="Товар 'Стальная труба' (PIPE-STEEL-DRILL) не найден на складе.")
-
-        if steel_pipe_product.stock_quantity < contract.pipe_steel_used:
-            raise HTTPException(
-                status_code=400, detail=f"Недостаточно стальной трубы. В наличии: {steel_pipe_product.stock_quantity}, требуется: {contract.pipe_steel_used}")
-
-        # Списываем
-        steel_pipe_product.stock_quantity -= contract.pipe_steel_used
-
-        # Записываем в историю
-        movement = StockMovement(
-            product_id=steel_pipe_product.id,
-            quantity=-contract.pipe_steel_used,
-            type=MovementTypeEnum.WRITE_OFF_CONTRACT
-            # TODO: Привязать ID договора к движению
-        )
-        session.add(steel_pipe_product)
-        session.add(movement)
-        messages.append(
-            f"Списано стальной трубы: {contract.pipe_steel_used} м.")
-
-    # --- Списание пластиковой трубы (аналогично) ---
-    if contract.pipe_plastic_used and contract.pipe_plastic_used > 0:
-        plastic_pipe_product = session.exec(select(Product).where(
-            Product.internal_sku == "PIPE-PLASTIC-DRILL")).first()
-
-        if not plastic_pipe_product:
-            raise HTTPException(
-                status_code=404, detail="Товар 'Пластиковая труба' (PIPE-PLASTIC-DRILL) не найден на складе.")
-
-        if plastic_pipe_product.stock_quantity < contract.pipe_plastic_used:
-            raise HTTPException(
-                status_code=400, detail=f"Недостаточно пластиковой трубы. В наличии: {plastic_pipe_product.stock_quantity}, требуется: {contract.pipe_plastic_used}")
-
-        plastic_pipe_product.stock_quantity -= contract.pipe_plastic_used
-
-        movement = StockMovement(
-            product_id=plastic_pipe_product.id,
-            quantity=-contract.pipe_plastic_used,
-            type=MovementTypeEnum.WRITE_OFF_CONTRACT
-        )
-        session.add(plastic_pipe_product)
-        session.add(movement)
-        messages.append(
-            f"Списано пластиковой трубы: {contract.pipe_plastic_used} м.")
+            movement = StockMovement(
+                product_id=product.id,
+                quantity=-qty,
+                type=MovementTypeEnum.WRITE_OFF_CONTRACT,
+                stock_after=product.stock_quantity  # <-- ИЗМЕНЕНИЕ
+            )
+            session.add(product)
+            session.add(movement)
+            messages.append(f"Списано {product.name}: {qty} м.")
 
     if not messages:
         return {"message": "В договоре не указано количество труб для списания."}
-
     session.commit()
-
     return {"status": "success", "details": messages}
 
 
@@ -608,128 +545,53 @@ def update_product(product_id: int, product_update: ProductUpdate, session: Sess
     session.refresh(db_product)
     return db_product
 
-@app.post("/actions/import-products-from-xlsx/", summary="[v5] Импорт из XLSX", tags=["Операции"])
-async def import_products_v5(
-    start_row: int = Form(..., description="Номер строки, с которой начинаются данные"),
-    name_col: int = Form(..., description="Номер колонки с наименованием (ТОВАР)"),
-    qty_col: int = Form(..., description="Номер колонки с количеством (КОЛИЧЕСТВО)"),
-    internal_sku_col: int = Form(0, description="Номер колонки с ВНУТРЕННИМ артикулом (необязательно)"),
-    sku_col: int = Form(0, description="Номер колонки с артикулом поставщика (КОД) (необязательно)"),
-    price_col: int = Form(0, description="Номер колонки с ценой закупки (ЦЕНА) (необязательно)"),
-    auto_create_new: bool = Form(True, description="Автоматически создавать новые товары"),
-    
-    file: UploadFile = File(...), 
-    session: Session = Depends(get_session)
-):
-    """
-    [v5] Финальная версия. Умеет извлекать числа из текстовых ячеек.
-    """
-    if not file.filename.endswith('.xlsx'):
-        raise HTTPException(status_code=400, detail="Неверный формат файла. Требуется .xlsx")
 
-    try:
-        contents = await file.read()
-        workbook = openpyxl.load_workbook(io.BytesIO(contents))
-        sheet = workbook.active
-        report = {"created": [], "updated": [], "skipped": [], "errors": []}
+@app.delete("/products/{product_id}", status_code=204, summary="Удалить товар", tags=["Товары"])
+def delete_product(product_id: int, session: Session = Depends(get_session)):
+    """Удаляет товар по его ID."""
+    product = session.get(Product, product_id)
+    if not product:
+        raise HTTPException(status_code=404, detail="Товар не найден")
 
-        for row_index in range(start_row, sheet.max_row + 1):
-            try:
-                name = str(sheet.cell(row=row_index, column=name_col).value or "").strip()
-                quantity_raw = sheet.cell(row=row_index, column=qty_col).value
+    # Проверка, есть ли связанные записи, чтобы не нарушить целостность
+    has_movements = session.exec(select(StockMovement).where(
+        StockMovement.product_id == product_id)).first()
+    if has_movements:
+        raise HTTPException(
+            status_code=400, detail="Нельзя удалить товар, так как по нему есть движения в истории. Сначала удалите связанные движения.")
 
-                if not name or quantity_raw is None:
-                    report["skipped"].append(f"Строка {row_index}: Пропущена (пустое наименование или количество).")
-                    continue
-                
-                # --- УМНЫЙ ПАРСИНГ КОЛИЧЕСТВА ---
-                quantity_str = str(quantity_raw).strip()
-                # Ищем первое число (целое или с точкой/запятой) в строке
-                match = re.search(r'[\d\.,]+', quantity_str)
-                if match:
-                    # Заменяем запятую на точку для правильной конвертации
-                    num_str = match.group(0).replace(',', '.')
-                    quantity = float(num_str)
-                else:
-                    # Если число вообще не найдено, пробуем установить 0
-                    quantity = 0.0
-                    report["skipped"].append(f"Строка {row_index}: Не найдено число в количестве '{quantity_raw}', установлено 0.")
+    session.delete(product)
+    session.commit()
+    return None  # При статусе 204 тело ответа должно быть пустым
 
-                # --- КОНЕЦ УМНОГО ПАРСИНГА ---
 
-                internal_sku = str(sheet.cell(row=row_index, column=internal_sku_col).value or "").strip() if internal_sku_col > 0 else ""
-                supplier_sku = str(sheet.cell(row=row_index, column=sku_col).value or "").strip() if sku_col > 0 else ""
-                price_raw = sheet.cell(row=row_index, column=price_col).value if price_col > 0 else 0
-                price = float(price_raw or 0)
-
-                # Ищем товар. Приоритет у артикула поставщика, если он есть.
-                product = None
-                if supplier_sku:
-                    product = session.exec(select(Product).where(Product.supplier_sku == str(supplier_sku))).first()
-                
-                if not product and internal_sku:
-                    product = session.exec(select(Product).where(Product.internal_sku == str(internal_sku))).first()
-
-                if product:
-                    # При первичной загрузке мы не добавляем, а устанавливаем количество
-                    product.stock_quantity = quantity 
-                    if price > 0: product.purchase_price = price
-                    # Добавляем артикул поставщика, если его еще не было
-                    if supplier_sku and not product.supplier_sku:
-                        product.supplier_sku = supplier_sku
-                    session.add(product)
-                    report["updated"].append(f"Обновлен: {product.name} -> {quantity} шт.")
-                elif auto_create_new:
-                    # Создаем новый товар
-                    final_internal_sku = internal_sku if internal_sku else f"AUTO-{re.sub('[^0-9a-zA-Zа-яА-Я]+', '', name)[:10].upper()}"
-                    new_product = Product(
-                        name=name,
-                        supplier_sku=supplier_sku if supplier_sku else None,
-                        internal_sku=final_internal_sku,
-                        stock_quantity=quantity,
-                        purchase_price=price,
-                        retail_price=price * 1.2 # Пример: ставим наценку +20% по умолчанию
-                    )
-                    session.add(new_product)
-                    report["created"].append(f"Создан: {name} ({quantity} шт.)")
-                else:
-                    report["skipped"].append(f"Товар '{name}' не найден и не был создан.")
-
-            except Exception as e:
-                report["errors"].append(f"Ошибка в строке {row_index}: {e}")
-        
-        session.commit()
-        return report
-
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Глобальная ошибка при обработке файла: {e}")   
-    
 @app.post("/actions/clear-all-data/", summary="!!! ОПАСНО: Удалить ВСЕ данные !!!", tags=["_Служебное_"])
 def clear_all_data(session: Session = Depends(get_session)):
     """
     Удаляет все данные из таблиц в правильном порядке, чтобы избежать ошибок внешних ключей.
     ИСПОЛЬЗОВАТЬ С ОСТОРОЖНОСТЬЮ!
     """
-    
+
     # Сначала удаляем из "дочерних" таблиц
     session.query(StockMovement).delete()
     session.query(EstimateItem).delete()
-    
+
     # Затем из "родительских"
     session.query(Estimate).delete()
     session.query(Contract).delete()
     session.query(Worker).delete()
     session.query(Product).delete()
-    
+
     session.commit()
-    
+
     return {"message": "Все данные успешно удалены."}
+
 
 @app.get("/contracts/{contract_id}/generate-docx", summary="Сгенерировать договор в формате .docx", tags=["Договоры"])
 def generate_contract_docx(contract_id: int, session: Session = Depends(get_session)):
     """
-    Находит договор по ID, берет шаблон 'contract_template.docx',
-    вставляет в него данные и отдает готовый файл для скачивания.
+    [v2] Находит договор по ID, берет шаблон, вставляет данные
+    (с прочерками для пустых полей) и отдает готовый файл.
     """
     contract = session.get(Contract, contract_id)
     if not contract:
@@ -737,42 +599,495 @@ def generate_contract_docx(contract_id: int, session: Session = Depends(get_sess
 
     template_path = os.path.join("templates", "contract_template.docx")
     if not os.path.exists(template_path):
-        raise HTTPException(status_code=500, detail="Шаблон договора 'contract_template.docx' не найден в папке 'templates'")
+        raise HTTPException(
+            status_code=500, detail="Шаблон договора 'contract_template.docx' не найден в папке 'templates'")
 
     doc = DocxTemplate(template_path)
-    
+
     contract_date = contract.contract_date if contract.contract_date else date.today()
-    
-    # Автоматический расчет ориентировочной стоимости, если есть данные
+
     estimated_cost = "____________"
     if contract.estimated_depth and contract.price_per_meter_soil:
-        # Упрощенный расчет. Можно усложнить, если нужно.
-        estimated_cost = int(contract.estimated_depth * contract.price_per_meter_soil)
+        estimated_cost = int(contract.estimated_depth *
+                             contract.price_per_meter_soil)
 
-    # Словарь для подстановки. Ключи должны ТОЧНО совпадать с метками в .docx
+    # Функция-помощник для обработки пустых значений
+    def get_value(value, placeholder="_________________"):
+        return value if value else placeholder
+
     context = {
-        'contract_number': contract.contract_number,
+        'contract_number': get_value(contract.contract_number, "б/н"),
         'contract_day': contract_date.strftime('%d'),
         'contract_month_ru': ["января", "февраля", "марта", "апреля", "мая", "июня", "июля", "августа", "сентября", "октября", "ноября", "декабря"][contract_date.month - 1],
         'contract_year': contract_date.strftime('%Y'),
-        'client_name': contract.client_name,
-        'location': contract.location,
-        'estimated_depth': contract.estimated_depth or "______",
-        'price_per_meter_soil': contract.price_per_meter_soil or "______",
-        'price_per_meter_rock': contract.price_per_meter_rock or "______",
+
+        'client_name': get_value(contract.client_name),
+        'location': get_value(contract.location),
+
+        'estimated_depth': get_value(contract.estimated_depth, "____"),
+        'price_per_meter_soil': get_value(contract.price_per_meter_soil, "____"),
+        'price_per_meter_rock': get_value(contract.price_per_meter_rock, "____"),
         'estimated_total_cost': estimated_cost,
 
-        # Паспортные данные
-        'passport_series_number': contract.passport_series_number or "________________",
-        'passport_issued_by': contract.passport_issued_by or "________________",
-        'passport_issue_date': contract.passport_issue_date or "________________",
-        'passport_dep_code': contract.passport_dep_code or "________________",
-        'passport_address': contract.passport_address or "________________",
+        'passport_series_number': get_value(contract.passport_series_number),
+        'passport_issued_by': get_value(contract.passport_issued_by),
+        'passport_issue_date': get_value(contract.passport_issue_date),
+        'passport_dep_code': get_value(contract.passport_dep_code),
+        'passport_address': get_value(contract.passport_address),
     }
 
     doc.render(context)
-    
+
     output_filename = f"Contract_{contract.contract_number}.docx"
     doc.save(output_filename)
-    
+
     return FileResponse(path=output_filename, filename=output_filename, media_type='application/vnd.openxmlformats-officedocument.wordprocessingml.document')
+
+
+class WorkerUpdate(BaseModel):
+    name: str
+
+
+@app.patch("/workers/{worker_id}", response_model=Worker, summary="Обновить работника", tags=["Работники"])
+def update_worker(worker_id: int, worker_update: WorkerUpdate, session: Session = Depends(get_session)):
+    """Обновляет имя работника по его ID."""
+    db_worker = session.get(Worker, worker_id)
+    if not db_worker:
+        raise HTTPException(status_code=404, detail="Работник не найден")
+
+    # Обновляем поле имени
+    db_worker.name = worker_update.name
+
+    session.add(db_worker)
+    session.commit()
+    session.refresh(db_worker)
+
+    return db_worker
+
+
+@app.delete("/workers/{worker_id}", status_code=204, summary="Удалить работника", tags=["Работники"])
+def delete_worker(worker_id: int, session: Session = Depends(get_session)):
+    """Удаляет работника по его ID."""
+    db_worker = session.get(Worker, worker_id)
+    if not db_worker:
+        raise HTTPException(status_code=404, detail="Работник не найден")
+
+    # Проверка, есть ли связанные движения
+    has_movements = session.exec(select(StockMovement).where(
+        StockMovement.worker_id == worker_id)).first()
+    if has_movements:
+        raise HTTPException(
+            status_code=400, detail="Нельзя удалить работника, так как за ним числятся движения товаров.")
+
+    session.delete(db_worker)
+    session.commit()
+    return None
+
+
+class ImportMode(str, Enum):
+    TO_STOCK = "to_stock"  # Пополнение склада
+    AS_ESTIMATE = "as_estimate"  # Создание сметы
+
+
+@app.post("/actions/universal-import/", summary="[v9] Универсальный 'умный' импорт", tags=["Операции"])
+async def universal_import_v9(
+    mode: ImportMode = Form(..., description="Режим импорта"),
+    is_initial_load: bool = Form(
+        False, description="Установить остатки (а не добавить)"),
+    auto_create_new: bool = Form(
+        True, description="Создавать новые товары, если не найдены"),  # <-- ВЕРНУЛИ
+    file: UploadFile = File(...),
+    session: Session = Depends(get_session)
+):
+    try:
+        df = pd.read_excel(io.BytesIO(await file.read()), header=None, engine='calamine')
+    except Exception as e:
+        raise HTTPException(
+            status_code=400, detail=f"Не удалось прочитать файл Excel. Ошибка: {e}")
+
+    start_row, header_map = -1, {}
+    petrovich_headers = {"КОД", "ТОВАР", "КОЛИЧЕСТВО"}
+    my_sklad_headers = {"INTERNAL_SKU", "NAME", "STOCK_QUANTITY"}
+
+    for i, row in df.iterrows():
+        row_values = {str(v).strip().upper() for v in row.dropna().values}
+        header_map_raw = {str(v).strip().upper(
+        ): col_idx for col_idx, v in enumerate(row.values)}
+
+        if petrovich_headers.issubset(row_values):
+            start_row = i
+            header_map = {'sku': header_map_raw.get('КОД'), 'name': header_map_raw.get(
+                'ТОВАР'), 'qty': header_map_raw.get('КОЛИЧЕСТВО'), 'price': header_map_raw.get('ЦЕНА')}
+            break
+        elif my_sklad_headers.issubset(row_values):
+            start_row = i
+            header_map = {'internal_sku': header_map_raw.get('INTERNAL_SKU'), 'name': header_map_raw.get(
+                'NAME'), 'qty': header_map_raw.get('STOCK_QUANTITY'), 'sku': header_map_raw.get('SUPPLIER_SKU')}
+            break
+
+    if start_row == -1:
+        raise HTTPException(
+            status_code=400, detail="Не найдены заголовки ('КОД', 'ТОВАР'...) или ('internal_sku', 'name'...)")
+
+    data_df = df.iloc[start_row + 1:].where(pd.notna(df), None)
+
+    if mode == ImportMode.TO_STOCK:
+        report = {"created": [], "updated": [], "skipped": [], "errors": []}
+        for i, row in data_df.iterrows():
+            try:
+                # Безопасно извлекаем данные из строки DataFrame
+                name_val = row.get(header_map.get('name'))
+                qty_val = row.get(header_map.get('qty'))
+
+                # Пропускаем строку, если нет наименования или количества
+                if not name_val or qty_val is None:
+                    continue
+
+                # Конвертируем значения, обрабатывая возможные ошибки
+                qty = float(qty_val)
+                price_val = row.get(header_map.get('price'))
+                price = float(price_val or 0.0)
+
+                sku_val = row.get(header_map.get('sku'))
+                sku = str(sku_val).strip() if sku_val else None
+
+                internal_sku_val = row.get(header_map.get('internal_sku'))
+                internal_sku = str(internal_sku_val).strip(
+                ) if internal_sku_val else None
+
+                # Ищем товар в базе данных
+                product: Optional[Product] = None
+                if sku:
+                    product = session.exec(select(Product).where(
+                        Product.supplier_sku == sku)).first()
+                if not product and internal_sku:
+                    product = session.exec(select(Product).where(
+                        Product.internal_sku == internal_sku)).first()
+
+                # Основная логика: обновить, создать или пропустить
+                if product:
+                    # СЦЕНАРИЙ 1: ТОВАР НАЙДЕН - ОБНОВЛЯЕМ
+                    if is_initial_load:
+                        product.stock_quantity = qty  # Устанавливаем остаток
+                    else:
+                        product.stock_quantity += qty  # Добавляем к остатку
+
+                    product.purchase_price = price
+                    session.add(product)
+
+                    movement = StockMovement(
+                        product_id=product.id,
+                        quantity=qty,  # Поступление всегда положительное
+                        type=MovementTypeEnum.INCOME,
+                        stock_after=product.stock_quantity
+                    )
+                    session.add(movement)
+                    report["updated"].append(f"{product.name}")
+
+                elif auto_create_new:
+                    # СЦЕНАРИЙ 2: ТОВАР НЕ НАЙДЕН, НО РАЗРЕШЕНО СОЗДАНИЕ
+                    final_internal_sku = internal_sku if internal_sku else f"AUTO-{sku or re.sub('[^0-9a-zA-Zа-яА-Я]+', '', str(name_val))[:10].upper()}"
+
+                    new_product = Product(
+                        name=str(name_val),
+                        supplier_sku=sku,
+                        internal_sku=final_internal_sku,
+                        stock_quantity=qty,
+                        purchase_price=price,
+                        retail_price=price * 1.2
+                    )
+                    session.add(new_product)
+                    session.flush()  # Получаем ID для нового продукта
+
+                    movement = StockMovement(
+                        product_id=new_product.id,
+                        quantity=qty,
+                        type=MovementTypeEnum.INCOME,
+                        stock_after=new_product.stock_quantity
+                    )
+                    session.add(movement)
+                    report["created"].append(f"{name_val}")
+
+                else:
+                    # СЦЕНАРИЙ 3: ТОВАР НЕ НАЙДЕН, СОЗДАНИЕ ЗАПРЕЩЕНО
+                    report["skipped"].append(
+                        f"{name_val} (артикул {sku or internal_sku})")
+
+            except Exception as e:
+                report["errors"].append(f"Строка {i + start_row + 2}: {e}")
+
+        session.commit()
+        return report
+
+    elif mode == ImportMode.AS_ESTIMATE:
+        items_to_create = []
+        not_found_skus = []
+
+        # Безопасно получаем номера колонок из карты
+        sku_col = header_map.get('sku')
+        qty_col = header_map.get('qty')
+        price_col = header_map.get('price')
+
+        for i, row in data_df.iterrows():
+            try:
+                # Безопасно извлекаем данные
+                sku_val = row.get(sku_col)
+                qty_val = row.get(qty_col)
+                price_val = row.get(
+                    price_col) if price_col is not None else 0.0
+
+                sku = str(sku_val).strip() if sku_val else None
+
+                # Пропускаем, если нет артикула или количества
+                if not sku or qty_val is None:
+                    continue
+
+                qty = float(qty_val)
+                price = float(price_val or 0.0)
+
+                # Ищем товар в базе
+                product = session.exec(select(Product).where(
+                    Product.supplier_sku == sku)).first()
+
+                if product:
+                    # Сохраняем не только ID и кол-во, но и цену из файла
+                    items_to_create.append({
+                        "product_id": product.id,
+                        "quantity": qty,
+                        "price_from_file": price
+                    })
+                else:
+                    not_found_skus.append(sku)
+            except (ValueError, TypeError, KeyError):
+                continue
+
+        if not_found_skus:
+            raise HTTPException(
+                status_code=404, detail=f"Товары с артикулами не найдены: {', '.join(not_found_skus)}")
+        if not items_to_create:
+            raise HTTPException(
+                status_code=400, detail="Не найдено корректных товаров для сметы.")
+
+        # Поиск номера заказа (без изменений)
+        order_number = "б/н"
+        try:
+            order_cell_df = df[df.apply(lambda r: r.astype(
+                str).str.contains('Заказ №', na=False).any(), axis=1)]
+            if not order_cell_df.empty:
+                order_cell = order_cell_df.values[0]
+                order_number = str(next(s for s in order_cell if 'Заказ №' in str(s))).replace(
+                    "Заказ №", "").strip()
+        except Exception:
+            pass
+
+        # Создание сметы (без изменений)
+        new_estimate = Estimate(
+            estimate_number=f"Импорт-{order_number}", client_name="Импорт из файла", location="Петрович")
+        session.add(new_estimate)
+        session.flush()
+
+        # Создание позиций сметы с ценой из файла
+        for item in items_to_create:
+            est_item = EstimateItem(
+                product_id=item["product_id"],
+                quantity=item["quantity"],
+                unit_price=item["price_from_file"],  # <-- КЛЮЧЕВОЕ ИЗМЕНЕНИЕ
+                estimate_id=new_estimate.id
+            )
+            session.add(est_item)
+
+        session.commit()
+        session.refresh(new_estimate)
+        return new_estimate
+
+
+@app.get("/actions/history/", summary="Получить историю всех движений", tags=["Операции"])
+def get_history(session: Session = Depends(get_session)):
+    """
+    Возвращает полный лог всех движений товаров,
+    включая названия товаров и имена работников.
+    """
+    history_records = session.exec(
+        select(StockMovement).order_by(StockMovement.id.desc())
+    ).all()
+
+    # Вручную собираем ответ, чтобы гарантировать правильную структуру
+    response = []
+    for movement in history_records:
+        response.append({
+            "id": movement.id,
+            "timestamp": movement.timestamp,
+            "type": movement.type,
+            "quantity": movement.quantity,
+            "product": {
+                "name": movement.product.name if movement.product else "Товар удален"
+            },
+            # Явно проверяем, есть ли работник, и подставляем None, если нет
+            "worker": {
+                "name": movement.worker.name
+            } if movement.worker else None
+        })
+
+    return response
+
+
+@app.post("/actions/history/cancel/{movement_id}", summary="Отменить движение товара", tags=["Операции"])
+def cancel_movement(movement_id: int, session: Session = Depends(get_session)):
+    original_movement = session.get(StockMovement, movement_id)
+    if not original_movement:
+        raise HTTPException(status_code=404, detail="Движение не найдено.")
+    if "Отмена" in original_movement.type:
+        raise HTTPException(
+            status_code=400, detail="Нельзя отменить операцию отмены.")
+    product = session.get(Product, original_movement.product_id)
+    if not product:
+        raise HTTPException(
+            status_code=404, detail="Связанный товар был удален.")
+
+    correction_quantity = -original_movement.quantity
+    product.stock_quantity += correction_quantity
+
+    correction_movement = StockMovement(
+        product_id=original_movement.product_id,
+        worker_id=original_movement.worker_id,
+        quantity=correction_quantity,
+        type=f"Отмена ({original_movement.type})",
+        stock_after=product.stock_quantity  # <-- ИЗМЕНЕНИЕ
+    )
+    session.add(product)
+    session.add(correction_movement)
+    session.commit()
+    return {"message": f"Операция ID {movement_id} успешно отменена."}
+
+
+class EstimateUpdate(BaseModel):
+    estimate_number: Optional[str] = None
+    client_name: Optional[str] = None
+    location: Optional[str] = None
+    status: Optional[EstimateStatusEnum] = None
+    # Позволяем обновить ВЕСЬ список товаров
+    items: Optional[List[EstimateItemCreate]] = None
+
+# --- ДОБАВЬТЕ ЭТОТ ЭНДПОИНТ ПОСЛЕ GET /estimates/{id} ---
+
+
+@app.patch("/estimates/{estimate_id}", response_model=Estimate, summary="Обновить смету", tags=["Сметы"])
+def update_estimate(estimate_id: int, request: EstimateUpdate, session: Session = Depends(get_session)):
+    db_estimate = session.get(Estimate, estimate_id)
+    if not db_estimate:
+        raise HTTPException(status_code=404, detail="Смета не найдена")
+
+    # Обновляем простые поля "шапки"
+    update_data = request.model_dump(exclude_unset=True)
+    for key, value in update_data.items():
+        if key != "items":  # Поле items обрабатываем отдельно
+            setattr(db_estimate, key, value)
+
+    # Если в запросе пришел новый список товаров, полностью заменяем старый
+    if request.items is not None:
+        # 1. Удаляем все старые позиции
+        session.exec(delete(EstimateItem).where(
+            EstimateItem.estimate_id == estimate_id))
+
+        # 2. Добавляем новые
+        for item_data in request.items:
+            product = session.get(Product, item_data.product_id)
+            if not product:
+                raise HTTPException(
+                    status_code=404, detail=f"Товар с ID {item_data.product_id} не найден")
+
+            new_item = EstimateItem(
+                estimate_id=estimate_id,
+                product_id=product.id,
+                quantity=item_data.quantity,
+                unit_price=product.retail_price
+            )
+            session.add(new_item)
+
+    session.add(db_estimate)
+    session.commit()
+    session.refresh(db_estimate)
+    return db_estimate
+
+
+@app.delete("/estimates/{estimate_id}", status_code=204, summary="Удалить смету", tags=["Сметы"])
+def delete_estimate(estimate_id: int, session: Session = Depends(get_session)):
+    """
+    Удаляет смету и все связанные с ней позиции (EstimateItem).
+    Не позволяет удалить смету, если по ней уже были движения.
+    """
+    db_estimate = session.get(Estimate, estimate_id)
+    if not db_estimate:
+        raise HTTPException(status_code=404, detail="Смета не найдена")
+
+    if db_estimate.status not in [EstimateStatusEnum.DRAFT, EstimateStatusEnum.APPROVED, EstimateStatusEnum.CANCELLED]:
+        raise HTTPException(
+            status_code=400, detail=f"Нельзя удалить смету в статусе '{db_estimate.status.value}'.")
+
+    # --- ИСПРАВЛЕННАЯ ЛОГИКА УДАЛЕНИЯ ---
+    # 1. Находим все дочерние записи (позиции сметы)
+    items_to_delete = session.exec(select(EstimateItem).where(
+        EstimateItem.estimate_id == estimate_id)).all()
+
+    # 2. Удаляем их в цикле
+    for item in items_to_delete:
+        session.delete(item)
+
+    # 3. Теперь удаляем саму смету
+    session.delete(db_estimate)
+
+    session.commit()
+    return None
+
+
+class WriteOffItemRequest(BaseModel):
+    product_id: int
+    worker_id: int
+    quantity: float
+
+
+@app.post("/actions/write-off-item/", response_model=StockMovement, summary="Списать товар, числящийся за работником", tags=["Операции"])
+def write_off_item_from_worker(request: WriteOffItemRequest, session: Session = Depends(get_session)):
+    """
+    Создает запись о финальном списании товара, который был на руках у работника.
+    Эта операция НЕ меняет остаток на основном складе.
+    """
+    product = session.get(Product, request.product_id)
+    if not product:
+        raise HTTPException(status_code=404, detail="Товар не найден")
+
+    worker = session.get(Worker, request.worker_id)
+    if not worker:
+        raise HTTPException(status_code=404, detail="Работник не найден")
+
+    # Проверяем, достаточно ли товара на руках у работника для списания
+    # Считаем текущий баланс на руках
+    on_hand_balance_query = select(func.sum(StockMovement.quantity)).where(
+        StockMovement.worker_id == request.worker_id,
+        StockMovement.product_id == request.product_id
+    )
+    current_on_hand_sum = session.exec(
+        on_hand_balance_query).one_or_none() or 0
+    quantity_on_hand = -current_on_hand_sum
+
+    if quantity_on_hand < request.quantity:
+        raise HTTPException(
+            status_code=400, detail=f"У работника на руках только {quantity_on_hand} шт. Нельзя списать {request.quantity} шт.")
+
+    # Создаем новую запись в истории.
+    # ВАЖНО: для списания мы добавляем ПОЛОЖИТЕЛЬНОЕ движение,
+    # т.к. баланс работника считается как -SUM().
+    # Было: -10 (выдача). Стало: -10 + 5 (списание) = -5. Остаток на руках: 5.
+    movement = StockMovement(
+        product_id=request.product_id,
+        worker_id=request.worker_id,
+        quantity=request.quantity,  # Положительное значение
+        type=MovementTypeEnum.WRITE_OFF_WORKER,
+        stock_after=product.stock_quantity  # Остаток на ОСНОВНОМ складе не меняется
+    )
+
+    session.add(movement)
+    session.commit()
+    session.refresh(movement)
+
+    return movement
