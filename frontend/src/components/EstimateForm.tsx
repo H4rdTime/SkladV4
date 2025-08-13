@@ -4,11 +4,12 @@
 import { useState, useEffect, FormEvent } from 'react';
 import { useRouter } from 'next/navigation';
 import toast from 'react-hot-toast';
-import { ArrowLeft, Plus, Trash2, Truck, CheckCircle } from 'lucide-react';
+// --- 1. ДОБАВЛЯЕМ ИКОНКИ FileText и Star ---
+import { ArrowLeft, Plus, Trash2, Truck, CheckCircle, FileText, Star } from 'lucide-react'; 
 import Modal from '@/components/Modal';
 
 // Типы данных
-interface Product { id: number; name: string; retail_price: number; stock_quantity: number; }
+interface Product { id: number; name: string; retail_price: number; stock_quantity: number; is_favorite: boolean; }
 interface EstimateItem { product_id: number; product_name: string; quantity: number; unit_price: number; }
 interface Worker { id: number; name: string; }
 interface EstimateFormProps { estimateId?: string; }
@@ -26,6 +27,7 @@ export default function EstimateForm({ estimateId }: EstimateFormProps) {
 
   const [searchTerm, setSearchTerm] = useState('');
   const [searchResults, setSearchResults] = useState<Product[]>([]);
+  const [isSearchFocused, setIsSearchFocused] = useState(false);
 
   const [isShipModalOpen, setIsShipModalOpen] = useState(false);
   const [isAddItemsModalOpen, setIsAddItemsModalOpen] = useState(false);
@@ -53,14 +55,18 @@ export default function EstimateForm({ estimateId }: EstimateFormProps) {
   useEffect(() => { fetchEstimate(); }, [estimateId]);
 
   useEffect(() => {
-    if (searchTerm.length < 2) { setSearchResults([]); return; }
     const fetchProducts = async () => {
-      const response = await fetch(`${API_URL}/products/?search=${searchTerm}`);
-      setSearchResults(await response.json());
+      const response = await fetch(`${API_URL}/products/?search=${searchTerm}&size=20`);
+      const data = await response.json();
+      setSearchResults(data.items || []);
     };
-    const debounce = setTimeout(() => fetchProducts(), 300);
-    return () => clearTimeout(debounce);
-  }, [searchTerm]);
+    if (isSearchFocused || searchTerm.length > 0) {
+      const debounce = setTimeout(() => fetchProducts(), 300);
+      return () => clearTimeout(debounce);
+    } else {
+      setSearchResults([]);
+    }
+  }, [searchTerm, isSearchFocused]);
 
   const addItem = (product: Product) => {
     if (items.find(item => item.product_id === product.id)) { toast.error("Этот товар уже есть в смете."); return; }
@@ -90,6 +96,32 @@ export default function EstimateForm({ estimateId }: EstimateFormProps) {
       if (isCreating) router.push('/estimates'); else fetchEstimate();
     } catch (error: any) { toast.error(`Ошибка: ${error.message}`, { id: toastId }); }
   };
+
+  // --- 2. ДОБАВЛЕНА ФУНКЦИЯ-ОБРАБОТЧИК ---
+  const handleDownloadKP = async () => {
+    if (!estimateId) return;
+    const toastId = toast.loading('Генерация КП...');
+    try {
+        const response = await fetch(`${API_URL}/estimates/${estimateId}/generate-commercial-proposal`);
+        if (!response.ok) {
+            const errorData = await response.json();
+            throw new Error(errorData.detail || 'Ошибка генерации файла');
+        }
+        const blob = await response.blob();
+        const url = window.URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = `KP_${estimateData.number}.docx`;
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+        window.URL.revokeObjectURL(url);
+        toast.success('Коммерческое предложение готово!', { id: toastId });
+    } catch (error: any) {
+        toast.error(`Ошибка: ${error.message}`, { id: toastId });
+    }
+  };
+  // --- КОНЕЦ НОВОЙ ФУНКЦИИ ---
 
   const openShipModal = async () => {
     try {
@@ -134,7 +166,7 @@ export default function EstimateForm({ estimateId }: EstimateFormProps) {
   const handleIssueAdditional = async () => {
     if (itemsToAdd.length === 0) { toast.error("Добавьте товары для довыдачи."); return; }
     const toastId = toast.loading('Выполняется довыдача...');
-    const payload = { items: itemsToAdd.map(({ product_id, quantity }) => ({ product_id, quantity })) };
+    const payload = { items: itemsToAdd.map(({ product_id, quantity, unit_price }) => ({ product_id, quantity, unit_price })) };
     try {
       const response = await fetch(`${API_URL}/estimates/${estimateId}/issue-additional`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
       if (!response.ok) throw new Error((await response.json()).detail || 'Ошибка довыдачи');
@@ -159,7 +191,7 @@ export default function EstimateForm({ estimateId }: EstimateFormProps) {
       });
       if (!response.ok) throw new Error("Не удалось сменить статус");
       toast.success("Статус обновлен!", { id: toastId });
-      fetchEstimate(); // Перезагружаем данные, чтобы увидеть кнопки
+      fetchEstimate();
     } catch (error: any) {
       toast.error(`Ошибка: ${error.message}`, { id: toastId });
     }
@@ -173,16 +205,16 @@ export default function EstimateForm({ estimateId }: EstimateFormProps) {
 
       <form onSubmit={handleSubmit}>
         <div className="bg-white p-6 rounded-lg shadow-md mb-6">
-          <div className="flex justify-between items-center">
-            <h1 className="text-3xl ...">Смета №...</h1>
-            {/* --- НОВЫЙ БЛОК СТАТУСА --- */}
+          <div className="flex justify-between items-center mb-4">
+            <h1 className="text-3xl font-bold text-gray-800">{isCreating ? 'Новая смета' : `Смета №${estimateData.number}`}</h1>
             {!isCreating && (
               <div>
-                <label>Статус: </label>
+                <label className="text-sm font-medium">Статус: </label>
                 <select
                   value={status}
                   onChange={e => handleStatusChange(e.target.value)}
-                  className="p-1 border rounded-md bg-white"
+                  className="p-1 border rounded-md bg-white text-sm"
+                  disabled={status === 'Выполнена'}
                 >
                   <option>Черновик</option>
                   <option>Утверждена</option>
@@ -193,7 +225,6 @@ export default function EstimateForm({ estimateId }: EstimateFormProps) {
               </div>
             )}
           </div>
-          <h1 className="text-3xl font-bold text-gray-800 mb-4">{isCreating ? 'Новая смета' : `Смета №${estimateData.number}`}</h1>
           <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
             <input type="text" placeholder="Номер сметы" required value={estimateData.number} onChange={e => setEstimateData({ ...estimateData, number: e.target.value })} disabled={!isEditable} className="border p-2 rounded-md disabled:bg-gray-100" />
             <input type="text" placeholder="Имя клиента" required value={estimateData.client} onChange={e => setEstimateData({ ...estimateData, client: e.target.value })} disabled={!isEditable} className="border p-2 rounded-md disabled:bg-gray-100" />
@@ -205,10 +236,34 @@ export default function EstimateForm({ estimateId }: EstimateFormProps) {
           <h2 className="text-xl font-semibold mb-4 text-gray-700">Состав сметы</h2>
           {isEditable && (
             <div className="relative mb-4">
-              <input type="text" placeholder="Поиск и добавление товара..." value={searchTerm} onChange={e => setSearchTerm(e.target.value)} className="w-full border p-2 rounded-md" />
-              {searchResults.length > 0 && (
+              <input
+                type="text"
+                placeholder="Кликните для выбора или начните поиск..."
+                value={searchTerm}
+                onChange={e => setSearchTerm(e.target.value)}
+                onFocus={() => setIsSearchFocused(true)}
+                onBlur={() => setTimeout(() => setIsSearchFocused(false), 200)}
+                className="w-full border p-2 rounded-md"
+              />
+              {(isSearchFocused || searchResults.length > 0) && (
                 <ul className="absolute z-10 w-full bg-white border rounded-md mt-1 max-h-60 overflow-y-auto shadow-lg">
-                  {searchResults.map(product => <li key={product.id} onClick={() => addItem(product)} className="p-2 hover:bg-gray-100 cursor-pointer">{product.name} <span className="text-gray-500 text-sm">(Остаток: {product.stock_quantity})</span></li>)}
+                  {searchResults.length > 0 ? (
+                    searchResults.map(product => (
+                      <li
+                        key={product.id}
+                        onMouseDown={() => addItem(product)}
+                        className="p-2 hover:bg-gray-100 cursor-pointer flex justify-between items-center"
+                      >
+                        <span>
+                          {product.name}
+                          <span className="text-gray-500 text-sm ml-2">(Остаток: {product.stock_quantity})</span>
+                        </span>
+                        {product.is_favorite && <Star size={14} className="text-yellow-500 fill-yellow-400" />}
+                      </li>
+                    ))
+                  ) : (
+                    <li className="p-2 text-gray-500">Загрузка товаров...</li>
+                  )}
                 </ul>
               )}
             </div>
@@ -238,17 +293,27 @@ export default function EstimateForm({ estimateId }: EstimateFormProps) {
             </table>
           </div>
           <div className="flex justify-between items-center mt-6 pt-4 border-t">
-            <div className="flex space-x-2">
+            <div className="flex flex-wrap gap-2">
+               {/* --- 3. ДОБАВЛЕНА НОВАЯ КНОПКА --- */}
+              {!isCreating && (
+                  <button
+                      type="button"
+                      onClick={handleDownloadKP}
+                      className="flex items-center gap-2 px-4 py-2 bg-purple-600 text-white rounded-md hover:bg-purple-700"
+                  >
+                      <FileText size={18} /> Сформировать КП
+                  </button>
+              )}
               {status === 'Утверждена' && <button type="button" onClick={openShipModal} className="flex items-center gap-2 px-4 py-2 bg-orange-500 text-white rounded-md hover:bg-orange-600"><Truck size={18} /> Отгрузить</button>}
-              {status === 'В работе' && <button type="button" onClick={openAddItemsModal} className="flex items-center gap-2 px-4 py-2 bg-cyan-500 text-white rounded-md hover:bg-cyan-600"><Plus size={18} /> Довыдать товар</button>}
-              {status === 'В работе' && <button type="button" onClick={handleComplete} className="flex items-center gap-2 px-4 py-2 bg-teal-500 text-white rounded-md hover:bg-teal-600"><CheckCircle size={18} /> Завершить смету</button>}
+              {status === 'В работе' && <button type="button" onClick={openAddItemsModal} className="flex items-center gap-2 px-4 py-2 bg-cyan-500 text-white rounded-md hover:bg-cyan-600"><Plus size={18} /> Довыдать</button>}
+              {status === 'В работе' && <button type="button" onClick={handleComplete} className="flex items-center gap-2 px-4 py-2 bg-teal-500 text-white rounded-md hover:bg-teal-600"><CheckCircle size={18} /> Завершить</button>}
             </div>
             <div className="flex items-center">
               <div className="text-right mr-4">
                 <p className="text-gray-600">Итого:</p>
                 <p className="text-2xl font-bold text-gray-900">{totalSum.toFixed(2)} ₽</p>
               </div>
-              {isEditable && <button type="submit" className="px-6 py-3 bg-blue-600 text-white font-semibold rounded-md hover:bg-blue-700">Сохранить изменения</button>}
+              {isEditable && <button type="submit" className="px-6 py-3 bg-blue-600 text-white font-semibold rounded-md hover:bg-blue-700">Сохранить</button>}
             </div>
           </div>
         </div>
@@ -266,14 +331,35 @@ export default function EstimateForm({ estimateId }: EstimateFormProps) {
           </div>
         </div>
       </Modal>
-
+      
       <Modal isOpen={isAddItemsModalOpen} onClose={() => setIsAddItemsModalOpen(false)} title="Довыдача товаров">
         <div className="space-y-4">
           <div className="relative">
-            <input type="text" placeholder="Поиск товара для добавления..." value={searchTerm} onChange={e => setSearchTerm(e.target.value)} className="w-full border p-2 rounded-md" />
-            {searchResults.length > 0 && (
+            <input 
+              type="text" 
+              placeholder="Кликните для выбора или начните поиск..." 
+              value={searchTerm} 
+              onChange={e => setSearchTerm(e.target.value)}
+              onFocus={() => setIsSearchFocused(true)} 
+              onBlur={() => setTimeout(() => setIsSearchFocused(false), 200)}
+              className="w-full border p-2 rounded-md" 
+            />
+            {(isSearchFocused || searchResults.length > 0) && (
               <ul className="absolute z-20 w-full bg-white border rounded-md mt-1 max-h-40 overflow-y-auto shadow-lg">
-                {searchResults.map(product => (<li key={product.id} onClick={() => addItemToAdditionList(product)} className="p-2 hover:bg-gray-100 cursor-pointer">{product.name}</li>))}
+                {searchResults.length > 0 ? (
+                  searchResults.map(product => (
+                    <li 
+                      key={product.id} 
+                      onMouseDown={() => addItemToAdditionList(product)} 
+                      className="p-2 hover:bg-gray-100 cursor-pointer flex justify-between items-center"
+                    >
+                      <span>{product.name}</span>
+                      {product.is_favorite && <Star size={14} className="text-yellow-500 fill-yellow-400" />}
+                    </li>
+                  ))
+                ) : (
+                  <li className="p-2 text-gray-500">Загрузка товаров...</li>
+                )}
               </ul>
             )}
           </div>

@@ -22,6 +22,9 @@ from main_models import Product, Worker, StockMovement, MovementTypeEnum
 from fastapi.middleware.cors import CORSMiddleware
 import pandas as pd
 from fastapi import Query
+from main_models import ContractTypeEnum  # <-- Добавьте импорт
+from datetime import date, timedelta # <-- Добавьте timedelta
+from num2words import num2words # <-- Добавьте импорт новой библиотеки
 # --- Настройка подключения к базе данных ---
 DATABASE_URL = "postgresql://postgres.ebpejjvgdfddmjzacqfd:Transformers15832!?@aws-0-eu-central-1.pooler.supabase.com:5432/postgres"
 
@@ -349,11 +352,43 @@ class EstimateResponse(BaseModel):
     total_sum: float
 
 
-@app.get("/estimates/", response_model=List[Estimate], summary="Получить список всех смет", tags=["Сметы"])
-def read_estimates(session: Session = Depends(get_session)):
-    """Возвращает список всех смет (только 'шапки', без позиций)."""
-    estimates = session.query(Estimate).all()
-    return estimates
+# --- Добавьте эту новую модель в секцию "Модели для API" ---
+class EstimatePage(BaseModel):
+    total: int
+    items: List[Estimate]
+
+# --- ЗАМЕНИТЕ ЭТУ ФУНКЦИЮ ЦЕЛИКОМ ---
+
+
+@app.get("/estimates/", response_model=EstimatePage, summary="Получить список смет (с пагинацией и поиском)", tags=["Сметы"])
+def read_estimates(
+    search: Optional[str] = None,
+    page: int = Query(1, gt=0),
+    size: int = Query(20, gt=0, le=100),
+    session: Session = Depends(get_session)
+):
+    """Возвращает список всех смет с пагинацией и поиском."""
+    offset = (page - 1) * size
+
+    query = select(Estimate)
+    if search:
+        search_term = f"%{search}%"
+        query = query.where(
+            or_(
+                Estimate.estimate_number.ilike(search_term),
+                Estimate.client_name.ilike(search_term),
+                Estimate.location.ilike(search_term)
+            )
+        )
+
+    count_query = select(func.count()).select_from(query.subquery())
+    total_count = session.exec(count_query).one()
+
+    paginated_query = query.offset(offset).limit(
+        size).order_by(Estimate.id.desc())
+    items = session.exec(paginated_query).all()
+
+    return EstimatePage(total=total_count, items=items)
 
 
 @app.get("/estimates/{estimate_id}", response_model=EstimateResponse, summary="Получить одну смету по ID", tags=["Сметы"])
@@ -440,6 +475,7 @@ class ContractUpdate(BaseModel):
     pipe_steel_used: Optional[float] = None
     pipe_plastic_used: Optional[float] = None
     status: Optional[ContractStatusEnum] = None
+    contract_type: Optional[ContractTypeEnum] = None  # <-- ДОБАВЬТЕ ЭТУ СТРОКУ
 
 
 # --- Эндпоинты для Договоров (Contracts) ---
@@ -647,7 +683,13 @@ def generate_contract_docx(contract_id: int, session: Session = Depends(get_sess
     if not contract:
         raise HTTPException(status_code=404, detail="Договор не найден")
 
-    template_path = os.path.join("templates", "contract_template.docx")
+    if contract.contract_type == ContractTypeEnum.PUMPING:
+        template_path = os.path.join(
+            "templates", "contract_template_pumps.docx")
+        output_filename = f"Contract_Pumps_{contract.contract_number}.docx"
+    else:  # По умолчанию всегда будет бурение
+        template_path = os.path.join("templates", "contract_template.docx")
+        output_filename = f"Contract_Drilling_{contract.contract_number}.docx"
     if not os.path.exists(template_path):
         raise HTTPException(
             status_code=500, detail="Шаблон договора 'contract_template.docx' не найден в папке 'templates'")
@@ -1418,3 +1460,76 @@ def toggle_favorite(product_id: int, session: Session = Depends(get_session)):
     session.commit()
     session.refresh(product)
     return product
+
+@app.get("/estimates/{estimate_id}/generate-commercial-proposal", summary="Сгенерировать КП в формате .docx", tags=["Сметы"])
+def generate_commercial_proposal_docx(estimate_id: int, session: Session = Depends(get_session)):
+    """
+    Находит смету по ID, берет шаблон КП, вставляет данные и отдает готовый файл.
+    (Версия 2, с суммой прописью и доп. полями)
+    """
+    estimate = session.get(Estimate, estimate_id)
+    if not estimate:
+        raise HTTPException(status_code=404, detail="Смета не найдена")
+
+    template_path = os.path.join("templates", "commercial_proposal_template.docx")
+    if not os.path.exists(template_path):
+        raise HTTPException(
+            status_code=500, detail="Шаблон КП 'commercial_proposal_template.docx' не найден в папке 'templates'")
+
+    doc = DocxTemplate(template_path)
+
+    # --- Подготовка данных для шаблона (РАСШИРЕННАЯ ВЕРСИЯ) ---
+    items_for_template = []
+    total_sum = 0
+    for item in estimate.items:
+        product = session.get(Product, item.product_id)
+        item_total = item.quantity * item.unit_price
+        total_sum += item_total
+        
+        items_for_template.append({
+            'product_name': product.name,
+            'unit': product.unit.value,
+            'quantity': item.quantity,
+            'unit_price': f"{item.unit_price:,.2f}".replace(",", " "), # Форматируем с пробелом как в примере
+            'total': f"{item_total:,.2f}".replace(",", " ")
+        })
+    
+    # --- Новые поля для шаблона ---
+    today = date.today()
+    valid_until_date = today + timedelta(days=7) # Предложение действует 7 дней
+
+    # Формирование суммы прописью
+    rubles = int(total_sum)
+    kopecks = int((total_sum - rubles) * 100)
+    total_sum_in_words = f"{num2words(rubles, lang='ru', to='currency', currency='RUB')} {kopecks:02d} копеек".capitalize()
+
+    # Формирование "Темы"
+    # Пока сделаем просто, потом можно будет привязать к типу договора, если понадобится
+    theme = f"Работы по смете на объекте: {estimate.location or 'не указан'}"
+
+
+    context = {
+        'org_name': "ИП Бурмистров Дмитрий Георгиевич", # Можно вынести в настройки
+        'estimate_number': estimate.estimate_number,
+        # Форматирование даты как в примере: "07 августа 2025 г."
+        'current_date_formatted': f"{today.day:02d} {['января', 'февраля', 'марта', 'апреля', 'мая', 'июня', 'июля', 'августа', 'сентября', 'октября', 'ноября', 'декабря'][today.month - 1]} {today.year} г.",
+        'client_name': estimate.client_name,
+        'theme': theme,
+
+        'items': items_for_template,
+        
+        'total_sum_formatted': f"{total_sum:,.2f}".replace(",", " "),
+        
+        'total_items_count': len(items_for_template),
+        'total_sum_in_words': total_sum_in_words,
+        'valid_until_date_formatted': valid_until_date.strftime('%d.%m.%Y'),
+        'entrepreneur_name': "Бурмистров Д. Г." # Можно вынести в настройки
+    }
+
+    doc.render(context)
+
+    output_filename = f"KP_{estimate.estimate_number.replace(' ', '_')}.docx"
+
+    doc.save(output_filename)
+
+    return FileResponse(path=output_filename, filename=output_filename, media_type='application/vnd.openxmlformats-officedocument.wordprocessingml.document')

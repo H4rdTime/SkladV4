@@ -124,12 +124,20 @@ class ContractStatusEnum(str, Enum):
     COMPLETED = "Завершен"
     CANCELLED = "Отменен"
 
+
+class ContractTypeEnum(str, Enum):
+    DRILLING = "Бурение скважины"
+    PUMPING = "Монтаж насосного оборудования"
+    # При необходимости можно добавить и другие типы
+
 # --- Таблица для Договоров ---
 
 
 class Contract(SQLModel, table=True):
     """Договор на бурение скважины"""
     id: Optional[int] = Field(default=None, primary_key=True)
+    contract_type: ContractTypeEnum = Field(default=ContractTypeEnum.DRILLING)
+
     contract_number: str = Field(index=True)
     contract_date: datetime = Field(default_factory=datetime.utcnow)
 
