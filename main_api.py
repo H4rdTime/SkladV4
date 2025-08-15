@@ -48,8 +48,10 @@ app = FastAPI(
 
 # --- НАСТРОЙКА CORS ---
 # Список источников, которым разрешено делать запросы к нашему API
+
 origins = [
-    "http://localhost:3000",  # Адрес нашего Next.js фронтенда
+    "http://localhost:3000", # Для локальной разработки
+    "https://sklad-v4.vercel.app", # Для продакшена
 ]
 
 app.add_middleware(
