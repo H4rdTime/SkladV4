@@ -734,8 +734,17 @@ def generate_contract_docx(contract_id: int, session: Session = Depends(get_sess
 
     doc.render(context)
 
+    # Создаем папку, если ее вдруг нет
+    output_dir = "temp_files"
+    os.makedirs(output_dir, exist_ok=True)
+
+    # Формируем полный путь к файлу внутри новой папки
     output_filename = f"Contract_{contract.contract_number}.docx"
-    doc.save(output_filename)
+    output_path = os.path.join(output_dir, output_filename)
+
+    # Сохраняем файл по новому пути
+    doc.save(output_path)
+
 
     return FileResponse(path=output_filename, filename=output_filename, media_type='application/vnd.openxmlformats-officedocument.wordprocessingml.document')
 
