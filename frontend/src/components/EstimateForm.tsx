@@ -16,7 +16,7 @@ interface EstimateFormProps { estimateId?: string; }
 
 export default function EstimateForm({ estimateId }: EstimateFormProps) {
   const router = useRouter();
-  const API_URL = 'http://127.0.0.1:8000';
+  const API_URL = 'https://sklad-petrovich-api.onrender.com';
   const isCreating = !estimateId;
 
   // Состояния

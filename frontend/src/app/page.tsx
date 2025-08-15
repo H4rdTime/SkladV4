@@ -47,7 +47,7 @@ export default function WarehousePage() {
 
   const initialLoadInputRef = useRef<HTMLInputElement>(null);
   const supplierImportInputRef = useRef<HTMLInputElement>(null);
-  const API_URL = 'http://127.0.0.1:8000';
+  const API_URL = 'https://sklad-petrovich-api.onrender.com';
 
   useEffect(() => {
     const fetchProductsWithFilter = async () => {

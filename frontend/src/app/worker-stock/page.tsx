@@ -21,7 +21,7 @@ export default function WorkerStockPage() {
   const [stockItems, setStockItems] = useState<StockItem[]>([]);
   const [isLoading, setIsLoading] = useState(false);
 
-  const API_URL = 'http://127.0.0.1:8000';
+  const API_URL = 'https://sklad-petrovich-api.onrender.com';
 
   useEffect(() => {
     const fetchWorkers = async () => {

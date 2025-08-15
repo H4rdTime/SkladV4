@@ -14,7 +14,7 @@ export default function RootLayout({
 }: Readonly<{
   children: React.ReactNode;
 }>) {
-  const API_URL = 'http://127.0.0.1:8000';
+  const API_URL = 'https://sklad-petrovich-api.onrender.com';
 
   const handleClearData = async () => {
     if (confirm('!!! ВНИМАНИЕ !!!\n\nВы уверены, что хотите удалить ВСЕ данные (товары, сметы, договоры, историю)?\n\nЭто действие НЕОБРАТИМО.')) {

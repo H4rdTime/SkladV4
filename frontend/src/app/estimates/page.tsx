@@ -25,7 +25,7 @@ export default function EstimatesPage() {
     const [totalPages, setTotalPages] = useState(0);
     const PAGE_SIZE = 20;
 
-    const API_URL = 'http://127.0.0.1:8000';
+    const API_URL = 'https://sklad-petrovich-api.onrender.com';
 
     useEffect(() => {
         const fetchEstimates = async () => {

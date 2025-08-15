@@ -44,7 +44,7 @@ export default function ReportsPage() {
     const [endDate, setEndDate] = useState(new Date().toISOString().split('T')[0]);
     const [estimateIdFilter, setEstimateIdFilter] = useState('');
 
-    const API_URL = 'http://127.0.0.1:8000';
+    const API_URL = 'https://sklad-petrovich-api.onrender.com';
 
     useEffect(() => {
         const fetchProductsToOrder = async () => {

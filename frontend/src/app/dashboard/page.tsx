@@ -31,7 +31,7 @@ export default function DashboardPage() {
     const [data, setData] = useState<DashboardData | null>(null);
     const [isLoading, setIsLoading] = useState(true);
 
-    const API_URL = 'http://127.0.0.1:8000';
+    const API_URL = 'https://sklad-petrovich-api.onrender.com';
 
     useEffect(() => {
         const fetchData = async () => {

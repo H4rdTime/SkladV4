@@ -43,7 +43,7 @@ const ViewField = ({ label, value }: { label: string, value: any }) => (
 
 export default function ContractForm({ contractId }: ContractFormProps) {
     const router = useRouter();
-    const API_URL = 'http://127.0.0.1:8000';
+    const API_URL = 'https://sklad-petrovich-api.onrender.com';
 
     const [formData, setFormData] = useState<Partial<Contract>>({ status: 'В работе' });
     const [isLoading, setIsLoading] = useState(!!contractId);

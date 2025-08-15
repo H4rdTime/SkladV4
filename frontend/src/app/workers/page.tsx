@@ -16,7 +16,7 @@ export default function WorkersPage() {
     const [isModalOpen, setIsModalOpen] = useState(false);
     const [editingWorker, setEditingWorker] = useState<Worker | null>(null);
 
-    const API_URL = 'http://127.0.0.1:8000';
+    const API_URL = 'https://sklad-petrovich-api.onrender.com';
 
     const fetchWorkers = async () => {
         setIsLoading(true);

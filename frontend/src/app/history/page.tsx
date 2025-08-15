@@ -18,7 +18,7 @@ export default function HistoryPage() {
     const [history, setHistory] = useState<Movement[]>([]);
     const [isLoading, setIsLoading] = useState(true);
 
-    const API_URL = 'http://127.0.0.1:8000';
+    const API_URL = 'https://sklad-petrovich-api.onrender.com';
 
     const fetchHistory = async () => {
         setIsLoading(true);
