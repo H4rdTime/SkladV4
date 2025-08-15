@@ -56,7 +56,7 @@ export default function RootLayout({
                 <span>Дашборд</span>
               </Link>
               
-              <Link href="/" className="flex items-center gap-3 px-3 py-2 text-gray-700 rounded-md hover:bg-gray-100 transition-colors">
+              <Link href="/warehouse" className="flex items-center gap-3 px-3 py-2 text-gray-700 rounded-md hover:bg-gray-100 transition-colors">
                 <Warehouse size={20} />
                 <span>Склад</span>
               </Link>
