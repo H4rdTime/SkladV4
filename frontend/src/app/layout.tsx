@@ -1,11 +1,11 @@
 // frontend/src/app/layout.tsx
-'use client'; 
+'use client';
 
 import { Inter } from "next/font/google";
 import "./globals.css";
 import Link from 'next/link';
 import { Toaster, toast } from 'react-hot-toast';
-import { Warehouse, Users, FileText, BookUser, Trash2, History, ClipboardList } from 'lucide-react'; // Добавили ClipboardList
+import { Warehouse, Users, FileText, BookUser, Trash2, History, ClipboardList, LayoutDashboard } from 'lucide-react'; // Добавили ClipboardList
 
 const inter = Inter({ subsets: ["latin"] });
 
@@ -38,7 +38,7 @@ export default function RootLayout({
   return (
     <html lang="ru">
       <head>
-          <title>Система Учета "Склад v4"</title>
+        <title>Система Учета "Склад v4"</title>
       </head>
       <body className={`${inter.className} bg-gray-50`}>
         <Toaster position="bottom-right" toastOptions={{ duration: 5000 }} />
@@ -49,6 +49,13 @@ export default function RootLayout({
               <h1 className="text-2xl font-bold text-blue-600">Склад v4</h1>
             </div>
             <nav className="flex-grow p-4 space-y-2">
+
+              {/* --- ДОБАВЬТЕ ЭТУ ССЫЛКУ ПЕРВОЙ --- */}
+              <Link href="/dashboard" className="flex items-center gap-3 px-3 py-2 text-gray-700 rounded-md hover:bg-gray-100 transition-colors">
+                <LayoutDashboard size={20} />
+                <span>Дашборд</span>
+              </Link>
+              
               <Link href="/" className="flex items-center gap-3 px-3 py-2 text-gray-700 rounded-md hover:bg-gray-100 transition-colors">
                 <Warehouse size={20} />
                 <span>Склад</span>
@@ -89,7 +96,7 @@ export default function RootLayout({
               </button>
             </div>
           </aside>
-          
+
           <div className="flex-1 overflow-y-auto">
             {children}
           </div>

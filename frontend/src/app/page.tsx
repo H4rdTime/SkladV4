@@ -243,8 +243,11 @@ export default function WarehousePage() {
     const toastId = toast.loading(editingProduct ? 'Сохранение...' : 'Создание...');
     const formData = new FormData(event.currentTarget);
     const productData = { name: formData.get('name') as string, internal_sku: formData.get('internal_sku') as string, unit: formData.get('unit') as string, stock_quantity: Number(formData.get('stock_quantity')), purchase_price: Number(formData.get('purchase_price')), retail_price: Number(formData.get('retail_price')), min_stock_level: Number(formData.get('min_stock_level')), supplier_sku: (formData.get('supplier_sku') as string) || null };
+    console.log("ОТПРАВКА НА СЕРВЕР:", JSON.stringify(productData, null, 2));
+
     const url = editingProduct ? `${API_URL}/products/${editingProduct.id}` : `${API_URL}/products/`;
     const method = editingProduct ? 'PATCH' : 'POST';
+
     try {
       const response = await fetch(url, { method, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(productData) });
       if (!response.ok) throw new Error((await response.json()).detail || 'Ошибка сохранения');
@@ -458,12 +461,13 @@ export default function WarehousePage() {
             <div>
               <label htmlFor="unit" className="block text-sm font-medium text-gray-700">Ед. изм.</label>
               <select name="unit" id="unit" required defaultValue={editingProduct?.unit || 'шт.'} className="mt-1 block w-full border border-gray-300 rounded-md shadow-sm py-2 px-3 bg-white focus:outline-none focus:ring-indigo-500 focus:border-indigo-500">
-                <option>шт.</option>
-                <option>пог. м.</option>
-                <option>л.</option>
-                <option>кг.</option>
-                <option>кв. м.</option>
-                <option>куб. м.</option>
+                <option value="шт.">шт.</option>
+                <option value="пог. м.">пог. м.</option>
+                <option value="см.">см.</option>
+                <option value="л.">л.</option>
+                <option value="кг.">кг.</option>
+                <option value="кв. м.">кв. м.</option>
+                <option value="куб. м.">куб. м.</option>
               </select>
             </div>
             <div>

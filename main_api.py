@@ -5,6 +5,7 @@ from enum import Enum
 from itertools import product
 from operator import or_
 import os
+from dotenv import load_dotenv
 from fastapi import FastAPI, Depends, Form, HTTPException, UploadFile, File
 from fastapi.responses import FileResponse
 from numpy import delete
@@ -23,11 +24,13 @@ from fastapi.middleware.cors import CORSMiddleware
 import pandas as pd
 from fastapi import Query
 from main_models import ContractTypeEnum  # <-- Добавьте импорт
-from datetime import date, timedelta # <-- Добавьте timedelta
-from num2words import num2words # <-- Добавьте импорт новой библиотеки
+from datetime import date, timedelta  # <-- Добавьте timedelta
+from num2words import num2words  # <-- Добавьте импорт новой библиотеки
 # --- Настройка подключения к базе данных ---
-DATABASE_URL = "postgresql://postgres.ebpejjvgdfddmjzacqfd:Transformers15832!?@aws-0-eu-central-1.pooler.supabase.com:5432/postgres"
-
+load_dotenv()
+DATABASE_URL = os.getenv("DATABASE_URL")
+if not DATABASE_URL:
+    raise ValueError("Необходимо установить переменную окружения DATABASE_URL")
 engine = create_engine(DATABASE_URL)
 
 
@@ -592,6 +595,7 @@ class ProductUpdate(BaseModel):
     min_stock_level: Optional[float] = None
     # Важно: internal_sku тоже можно менять!
     internal_sku: Optional[str] = None
+    is_favorite: Optional[bool] = None
 
 
 @app.patch("/products/{product_id}", response_model=Product, summary="Обновить товар", tags=["Товары"])
@@ -1461,6 +1465,7 @@ def toggle_favorite(product_id: int, session: Session = Depends(get_session)):
     session.refresh(product)
     return product
 
+
 @app.get("/estimates/{estimate_id}/generate-commercial-proposal", summary="Сгенерировать КП в формате .docx", tags=["Сметы"])
 def generate_commercial_proposal_docx(estimate_id: int, session: Session = Depends(get_session)):
     """
@@ -1471,7 +1476,8 @@ def generate_commercial_proposal_docx(estimate_id: int, session: Session = Depen
     if not estimate:
         raise HTTPException(status_code=404, detail="Смета не найдена")
 
-    template_path = os.path.join("templates", "commercial_proposal_template.docx")
+    template_path = os.path.join(
+        "templates", "commercial_proposal_template.docx")
     if not os.path.exists(template_path):
         raise HTTPException(
             status_code=500, detail="Шаблон КП 'commercial_proposal_template.docx' не найден в папке 'templates'")
@@ -1485,31 +1491,33 @@ def generate_commercial_proposal_docx(estimate_id: int, session: Session = Depen
         product = session.get(Product, item.product_id)
         item_total = item.quantity * item.unit_price
         total_sum += item_total
-        
+
         items_for_template.append({
             'product_name': product.name,
             'unit': product.unit.value,
             'quantity': item.quantity,
-            'unit_price': f"{item.unit_price:,.2f}".replace(",", " "), # Форматируем с пробелом как в примере
+            # Форматируем с пробелом как в примере
+            'unit_price': f"{item.unit_price:,.2f}".replace(",", " "),
             'total': f"{item_total:,.2f}".replace(",", " ")
         })
-    
+
     # --- Новые поля для шаблона ---
     today = date.today()
-    valid_until_date = today + timedelta(days=7) # Предложение действует 7 дней
+    # Предложение действует 7 дней
+    valid_until_date = today + timedelta(days=7)
 
     # Формирование суммы прописью
     rubles = int(total_sum)
     kopecks = int((total_sum - rubles) * 100)
-    total_sum_in_words = f"{num2words(rubles, lang='ru', to='currency', currency='RUB')} {kopecks:02d} копеек".capitalize()
+    total_sum_in_words = f"{num2words(rubles, lang='ru', to='currency', currency='RUB')} {kopecks:02d} копеек".capitalize(
+    )
 
     # Формирование "Темы"
     # Пока сделаем просто, потом можно будет привязать к типу договора, если понадобится
     theme = f"Работы по смете на объекте: {estimate.location or 'не указан'}"
 
-
     context = {
-        'org_name': "ИП Бурмистров Дмитрий Георгиевич", # Можно вынести в настройки
+        'org_name': "ИП Бурмистров Дмитрий Георгиевич",  # Можно вынести в настройки
         'estimate_number': estimate.estimate_number,
         # Форматирование даты как в примере: "07 августа 2025 г."
         'current_date_formatted': f"{today.day:02d} {['января', 'февраля', 'марта', 'апреля', 'мая', 'июня', 'июля', 'августа', 'сентября', 'октября', 'ноября', 'декабря'][today.month - 1]} {today.year} г.",
@@ -1517,13 +1525,13 @@ def generate_commercial_proposal_docx(estimate_id: int, session: Session = Depen
         'theme': theme,
 
         'items': items_for_template,
-        
+
         'total_sum_formatted': f"{total_sum:,.2f}".replace(",", " "),
-        
+
         'total_items_count': len(items_for_template),
         'total_sum_in_words': total_sum_in_words,
         'valid_until_date_formatted': valid_until_date.strftime('%d.%m.%Y'),
-        'entrepreneur_name': "Бурмистров Д. Г." # Можно вынести в настройки
+        'entrepreneur_name': "Бурмистров Д. Г."  # Можно вынести в настройки
     }
 
     doc.render(context)
@@ -1533,3 +1541,51 @@ def generate_commercial_proposal_docx(estimate_id: int, session: Session = Depen
     doc.save(output_filename)
 
     return FileResponse(path=output_filename, filename=output_filename, media_type='application/vnd.openxmlformats-officedocument.wordprocessingml.document')
+
+class DashboardSummary(BaseModel):
+    products_to_order_count: int
+    estimates_in_progress_count: int
+    contracts_in_progress_count: int
+    profit_last_30_days: float
+
+@app.get("/dashboard/summary", response_model=DashboardSummary, summary="Сводка для дашборда", tags=["Дашборд"])
+def get_dashboard_summary(session: Session = Depends(get_session)):
+    """Собирает ключевые показатели для главной страницы."""
+
+    products_to_order_query = select(func.count(Product.id)).where(
+        Product.is_deleted == False,
+        Product.stock_quantity > 0,
+        Product.stock_quantity <= Product.min_stock_level
+    )
+    products_to_order_count = session.exec(products_to_order_query).one()
+
+    estimates_in_progress_query = select(func.count(Estimate.id)).where(
+        Estimate.status == EstimateStatusEnum.IN_PROGRESS
+    )
+    estimates_in_progress_count = session.exec(estimates_in_progress_query).one()
+
+    contracts_in_progress_query = select(func.count(Contract.id)).where(
+        Contract.status == ContractStatusEnum.IN_PROGRESS
+    )
+    contracts_in_progress_count = session.exec(contracts_in_progress_query).one()
+
+    thirty_days_ago = date.today() - timedelta(days=30)
+    
+    profit_estimates = session.exec(select(Estimate).where(
+        Estimate.status.in_([EstimateStatusEnum.COMPLETED, EstimateStatusEnum.IN_PROGRESS]),
+        Estimate.created_at >= thirty_days_ago
+    )).all()
+    
+    total_profit = 0
+    for estimate in profit_estimates:
+        if not estimate.items: continue
+        total_retail = sum(item.quantity * item.unit_price for item in estimate.items)
+        total_purchase = sum(item.quantity * item.product.purchase_price for item in estimate.items if item.product)
+        total_profit += total_retail - total_purchase
+
+    return DashboardSummary(
+        products_to_order_count=products_to_order_count,
+        estimates_in_progress_count=estimates_in_progress_count,
+        contracts_in_progress_count=contracts_in_progress_count,
+        profit_last_30_days=total_profit
+    )
