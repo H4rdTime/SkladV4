@@ -2,6 +2,7 @@
 'use client';
 
 import { useState, useEffect } from 'react';
+import { fetchApi } from '@/lib/api';
 import toast from 'react-hot-toast';
 
 interface Worker {
@@ -21,13 +22,12 @@ export default function WorkerStockPage() {
   const [stockItems, setStockItems] = useState<StockItem[]>([]);
   const [isLoading, setIsLoading] = useState(false);
 
-  const API_URL = 'https://sklad-petrovich-api.onrender.com';
+  // API_URL больше не нужен, используем fetchApi
 
   useEffect(() => {
     const fetchWorkers = async () => {
       try {
-        const response = await fetch(`${API_URL}/workers/`);
-        const data: Worker[] = await response.json();
+        const data: Worker[] = await fetchApi('/workers/');
         setWorkers(data);
         if (data.length > 0) {
           setSelectedWorkerId(String(data[0].id));
@@ -46,8 +46,8 @@ export default function WorkerStockPage() {
     }
     setIsLoading(true);
     try {
-      const response = await fetch(`${API_URL}/actions/worker-stock/${workerId}`);
-      setStockItems(await response.json());
+      const data = await fetchApi(`/actions/worker-stock/${workerId}`);
+      setStockItems(data);
     } catch (error) {
       toast.error('Не удалось загрузить товары работника');
     } finally {
@@ -62,7 +62,7 @@ export default function WorkerStockPage() {
   const performReturn = async (item: StockItem, quantity: number) => {
     const toastId = toast.loading('Выполняется возврат...');
     try {
-      const response = await fetch(`${API_URL}/actions/return-item/`, {
+      await fetchApi('/actions/return-item/', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -71,12 +71,6 @@ export default function WorkerStockPage() {
           quantity: quantity
         }),
       });
-
-      if (!response.ok) {
-        const errorData = await response.json();
-        throw new Error(errorData.detail || 'Ошибка при возврате');
-      }
-      
       toast.success('Товар успешно возвращен.', { id: toastId });
       fetchStockForWorker(selectedWorkerId);
     } catch (error: any) {
@@ -102,7 +96,7 @@ export default function WorkerStockPage() {
     }
   };
 
-  const handleWriteOff = (item: StockItem) => {
+  const handleWriteOff = async (item: StockItem) => {
     const quantityToWriteOff = prompt(`Сколько "${item.product_name}" СПИСАТЬ (было использовано)?\nНа руках: ${item.quantity_on_hand}`, String(item.quantity_on_hand));
     if (quantityToWriteOff === null) return;
     
@@ -113,30 +107,23 @@ export default function WorkerStockPage() {
     }
 
     const toastId = toast.loading('Выполнение списания...');
-    fetch(`${API_URL}/actions/write-off-item/`, {
+    try {
+      await fetchApi('/actions/write-off-item/', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-            product_id: item.product_id,
-            worker_id: Number(selectedWorkerId),
-            quantity: quantity
+          product_id: item.product_id,
+          worker_id: Number(selectedWorkerId),
+          quantity: quantity
         }),
-    })
-    .then(async response => {
-        if (!response.ok) {
-            const errorData = await response.json();
-            throw new Error(errorData.detail || 'Ошибка при списании');
-        }
-        return response.json();
-    })
-    .then(() => {
-        toast.success('Товар успешно списан.', { id: toastId });
-        fetchStockForWorker(selectedWorkerId);
-    })
-    .catch((error: any) => {
-        toast.error(`Ошибка: ${error.message}`, { id: toastId });
-    });
+      });
+      toast.success('Товар успешно списан.', { id: toastId });
+      fetchStockForWorker(selectedWorkerId);
+    } catch (error: any) {
+      toast.error(`Ошибка: ${error.message}`, { id: toastId });
+    }
   };
+  // ...existing code...
 
   return (
     <main className="container mx-auto p-4 sm:p-6 lg:p-8">

@@ -2,6 +2,7 @@
 'use client';
 
 import { useState, useEffect } from 'react';
+import { fetchApi } from '@/lib/api';
 import { RotateCcw } from 'lucide-react';
 
 interface Movement {
@@ -18,14 +19,13 @@ export default function HistoryPage() {
     const [history, setHistory] = useState<Movement[]>([]);
     const [isLoading, setIsLoading] = useState(true);
 
-    const API_URL = 'https://sklad-petrovich-api.onrender.com';
+    // API_URL больше не нужен, используем fetchApi
 
     const fetchHistory = async () => {
         setIsLoading(true);
         try {
-            const response = await fetch(`${API_URL}/actions/history/`);
-            if (!response.ok) throw new Error('Ошибка загрузки истории');
-            setHistory(await response.json());
+            const data = await fetchApi('/actions/history/');
+            setHistory(data);
         } catch (error) {
             console.error(error);
         } finally {
@@ -40,13 +40,7 @@ export default function HistoryPage() {
     const handleCancelMovement = async (movementId: number) => {
         if (confirm('Вы уверены, что хотите отменить эту операцию? Будет создана обратная, корректирующая запись в истории.')) {
             try {
-                const response = await fetch(`${API_URL}/actions/history/cancel/${movementId}`, {
-                    method: 'POST',
-                });
-                if (!response.ok) {
-                    const errorData = await response.json();
-                    throw new Error(errorData.detail || 'Не удалось отменить операцию');
-                }
+                await fetchApi(`/actions/history/cancel/${movementId}`, { method: 'POST' });
                 alert('Операция успешно отменена!');
                 fetchHistory(); // Обновляем историю, чтобы увидеть новую запись
             } catch (err: any) {

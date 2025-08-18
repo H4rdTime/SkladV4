@@ -2,6 +2,7 @@
 'use client';
 
 import { useState, useEffect } from 'react';
+import { fetchApi } from '@/lib/api';
 import { Plus, Eye } from 'lucide-react';
 import Link from 'next/link';
 
@@ -18,15 +19,14 @@ export default function ContractsPage() {
   const [contracts, setContracts] = useState<Contract[]>([]);
   const [isLoading, setIsLoading] = useState(true);
 
-  const API_URL = 'https://sklad-petrovich-api.onrender.com';
+  // API_URL больше не нужен, используем fetchApi
 
   useEffect(() => {
     const fetchContracts = async () => {
       setIsLoading(true);
       try {
-        const response = await fetch(`${API_URL}/contracts/`);
-        if (!response.ok) throw new Error('Ошибка загрузки договоров');
-        setContracts(await response.json());
+        const data = await fetchApi('/contracts/');
+        setContracts(data);
       } catch (error) {
         console.error(error);
       } finally {

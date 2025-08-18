@@ -2,6 +2,7 @@
 'use client';
 
 import { useState, useEffect, FormEvent } from 'react';
+import { fetchApi } from '@/lib/api';
 import { useRouter } from 'next/navigation';
 import toast from 'react-hot-toast';
 // --- 1. ДОБАВЛЯЕМ ИКОНКИ FileText и Star ---
@@ -16,7 +17,7 @@ interface EstimateFormProps { estimateId?: string; }
 
 export default function EstimateForm({ estimateId }: EstimateFormProps) {
   const router = useRouter();
-  const API_URL = 'https://sklad-petrovich-api.onrender.com';
+  // API_URL больше не нужен, используем fetchApi
   const isCreating = !estimateId;
 
   // Состояния
@@ -39,9 +40,7 @@ export default function EstimateForm({ estimateId }: EstimateFormProps) {
     if (isCreating) { setIsLoading(false); return; }
     setIsLoading(true);
     try {
-      const response = await fetch(`${API_URL}/estimates/${estimateId}`);
-      if (!response.ok) throw new Error('Не удалось загрузить смету');
-      const data = await response.json();
+      const data = await fetchApi(`/estimates/${estimateId}`);
       setEstimateData({ number: data.estimate_number, client: data.client_name, location: data.location || '' });
       setStatus(data.status);
       setItems(data.items.map((item: any) => ({ product_id: item.product_id, product_name: item.product_name, quantity: item.quantity, unit_price: item.unit_price })));
@@ -56,8 +55,7 @@ export default function EstimateForm({ estimateId }: EstimateFormProps) {
 
   useEffect(() => {
     const fetchProducts = async () => {
-      const response = await fetch(`${API_URL}/products/?search=${searchTerm}&size=20`);
-      const data = await response.json();
+      const data = await fetchApi(`/products/?search=${searchTerm}&size=20`);
       setSearchResults(data.items || []);
     };
     if (isSearchFocused || searchTerm.length > 0) {
@@ -87,46 +85,54 @@ export default function EstimateForm({ estimateId }: EstimateFormProps) {
       location: estimateData.location,
       items: items.map(({ product_id, quantity, unit_price }) => ({ product_id, quantity, unit_price })),
     };
-    const url = isCreating ? `${API_URL}/estimates/` : `${API_URL}/estimates/${estimateId}`;
-    const method = isCreating ? 'POST' : 'PATCH';
     try {
-      const response = await fetch(url, { method, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
-      if (!response.ok) throw new Error((await response.json()).detail || 'Ошибка сохранения');
-      toast.success(isCreating ? 'Смета создана!' : 'Смета обновлена!', { id: toastId });
-      if (isCreating) router.push('/estimates'); else fetchEstimate();
-    } catch (error: any) { toast.error(`Ошибка: ${error.message}`, { id: toastId }); }
+      if (isCreating) {
+        await fetchApi('/estimates/', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload),
+        });
+        toast.success('Смета создана!', { id: toastId });
+        router.push('/estimates');
+      } else {
+        await fetchApi(`/estimates/${estimateId}`, {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload),
+        });
+        toast.success('Смета обновлена!', { id: toastId });
+        fetchEstimate();
+      }
+    } catch (error: any) {
+      toast.error(`Ошибка: ${error.message}`, { id: toastId });
+    }
   };
 
   // --- 2. ДОБАВЛЕНА ФУНКЦИЯ-ОБРАБОТЧИК ---
   const handleDownloadKP = async () => {
     if (!estimateId) return;
     const toastId = toast.loading('Генерация КП...');
-    try {
-        const response = await fetch(`${API_URL}/estimates/${estimateId}/generate-commercial-proposal`);
-        if (!response.ok) {
-            const errorData = await response.json();
-            throw new Error(errorData.detail || 'Ошибка генерации файла');
-        }
-        const blob = await response.blob();
-        const url = window.URL.createObjectURL(blob);
-        const a = document.createElement('a');
-        a.href = url;
-        a.download = `KP_${estimateData.number}.docx`;
-        document.body.appendChild(a);
-        a.click();
-        a.remove();
-        window.URL.revokeObjectURL(url);
-        toast.success('Коммерческое предложение готово!', { id: toastId });
-    } catch (error: any) {
-        toast.error(`Ошибка: ${error.message}`, { id: toastId });
-    }
+  try {
+    const response = await fetchApi(`/api/estimates/${estimateId}/generate-commercial-proposal`);
+    const blob = await response.blob();
+    const url = window.URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `KP_${estimateData.number}.docx`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    window.URL.revokeObjectURL(url);
+    toast.success('Коммерческое предложение готово!', { id: toastId });
+  } catch (error: any) {
+    toast.error(`Ошибка: ${error.message}`, { id: toastId });
+  }
   };
   // --- КОНЕЦ НОВОЙ ФУНКЦИИ ---
 
   const openShipModal = async () => {
     try {
-      const response = await fetch(`${API_URL}/workers/`);
-      const data = await response.json();
+      const data = await fetchApi(`/workers/`);
       setWorkers(data);
       if (data.length > 0) { setSelectedWorkerId(String(data[0].id)); setIsShipModalOpen(true); }
       else { toast.error('Сначала добавьте работников.'); }
@@ -136,8 +142,7 @@ export default function EstimateForm({ estimateId }: EstimateFormProps) {
   const handleShipEstimate = async () => {
     const toastId = toast.loading('Выполняется отгрузка...');
     try {
-      const response = await fetch(`${API_URL}/estimates/${estimateId}/ship?worker_id=${selectedWorkerId}`, { method: 'POST' });
-      if (!response.ok) throw new Error((await response.json()).detail || 'Ошибка отгрузки');
+      await fetchApi(`/estimates/${estimateId}/ship?worker_id=${selectedWorkerId}`, { method: 'POST' });
       toast.success('Смета успешно отгружена!', { id: toastId });
       setIsShipModalOpen(false);
       fetchEstimate();
@@ -148,8 +153,7 @@ export default function EstimateForm({ estimateId }: EstimateFormProps) {
     if (!confirm('Завершить смету? Будет произведено финальное списание.')) return;
     const toastId = toast.loading('Завершение сметы...');
     try {
-      const response = await fetch(`${API_URL}/estimates/${estimateId}/complete`, { method: 'POST' });
-      if (!response.ok) throw new Error((await response.json()).detail);
+      await fetchApi(`/estimates/${estimateId}/complete`, { method: 'POST' });
       toast.success('Смета успешно завершена!', { id: toastId });
       fetchEstimate();
     } catch (err: any) { toast.error(`Ошибка: ${err.message}`, { id: toastId }); }
@@ -168,8 +172,7 @@ export default function EstimateForm({ estimateId }: EstimateFormProps) {
     const toastId = toast.loading('Выполняется довыдача...');
     const payload = { items: itemsToAdd.map(({ product_id, quantity, unit_price }) => ({ product_id, quantity, unit_price })) };
     try {
-      const response = await fetch(`${API_URL}/estimates/${estimateId}/issue-additional`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
-      if (!response.ok) throw new Error((await response.json()).detail || 'Ошибка довыдачи');
+      await fetchApi(`/estimates/${estimateId}/issue-additional`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
       toast.success('Товары успешно довыданы!', { id: toastId });
       setIsAddItemsModalOpen(false);
       fetchEstimate();
@@ -184,12 +187,11 @@ export default function EstimateForm({ estimateId }: EstimateFormProps) {
   const handleStatusChange = async (newStatus: string) => {
     const toastId = toast.loading('Смена статуса...');
     try {
-      const response = await fetch(`${API_URL}/estimates/${estimateId}`, {
+      await fetchApi(`/estimates/${estimateId}`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ status: newStatus }),
       });
-      if (!response.ok) throw new Error("Не удалось сменить статус");
       toast.success("Статус обновлен!", { id: toastId });
       fetchEstimate();
     } catch (error: any) {

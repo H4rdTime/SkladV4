@@ -2,6 +2,7 @@
 'use client';
 
 import { useState, useEffect, FormEvent } from 'react';
+import { fetchApi } from '@/lib/api';
 import Modal from '@/components/Modal';
 import { Plus, RefreshCw, Edit, Trash2, Users } from 'lucide-react';
 
@@ -16,14 +17,13 @@ export default function WorkersPage() {
     const [isModalOpen, setIsModalOpen] = useState(false);
     const [editingWorker, setEditingWorker] = useState<Worker | null>(null);
 
-    const API_URL = 'https://sklad-petrovich-api.onrender.com';
+    // API_URL больше не нужен, используем fetchApi
 
     const fetchWorkers = async () => {
         setIsLoading(true);
         try {
-            const response = await fetch(`${API_URL}/workers/`);
-            if (!response.ok) throw new Error('Ошибка загрузки работников');
-            setWorkers(await response.json());
+            const data = await fetchApi('/workers/');
+            setWorkers(data);
         } catch (error) {
             console.error(error);
         } finally {
@@ -49,22 +49,19 @@ export default function WorkersPage() {
         event.preventDefault();
         const formData = new FormData(event.currentTarget);
         const workerData = { name: formData.get('name') as string };
-
-        // Логика теперь полная
-        const url = editingWorker
-            ? `${API_URL}/workers/${editingWorker.id}`
-            : `${API_URL}/workers/`;
-        const method = editingWorker ? 'PATCH' : 'POST';
-
         try {
-            const response = await fetch(url, {
-                method: method,
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify(workerData),
-            });
-            if (!response.ok) {
-                const errorData = await response.json();
-                throw new Error(errorData.detail || 'Ошибка сохранения работника');
+            if (editingWorker) {
+                await fetchApi(`/workers/${editingWorker.id}`, {
+                    method: 'PATCH',
+                    body: JSON.stringify(workerData),
+                    headers: { 'Content-Type': 'application/json' },
+                });
+            } else {
+                await fetchApi('/workers/', {
+                    method: 'POST',
+                    body: JSON.stringify(workerData),
+                    headers: { 'Content-Type': 'application/json' },
+                });
             }
             setIsModalOpen(false);
             fetchWorkers();
@@ -76,13 +73,7 @@ export default function WorkersPage() {
     const handleDelete = async (workerId: number) => {
         if (confirm('Вы уверены, что хотите удалить этого работника?')) {
             try {
-                const response = await fetch(`${API_URL}/workers/${workerId}`, {
-                    method: 'DELETE',
-                });
-                if (!response.ok) {
-                    const errorData = await response.json();
-                    throw new Error(errorData.detail || 'Не удалось удалить работника');
-                }
+                await fetchApi(`/workers/${workerId}`, { method: 'DELETE' });
                 fetchWorkers(); // Обновляем список после удаления
             } catch (err: any) {
                 alert(`Ошибка: ${err.message}`);

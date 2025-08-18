@@ -2,6 +2,7 @@
 'use client';
 
 import { useState, useEffect, FormEvent } from 'react';
+import { fetchApi } from '@/lib/api';
 import toast from 'react-hot-toast';
 import { ShoppingCart, DollarSign } from 'lucide-react';
 
@@ -44,21 +45,14 @@ export default function ReportsPage() {
     const [endDate, setEndDate] = useState(new Date().toISOString().split('T')[0]);
     const [estimateIdFilter, setEstimateIdFilter] = useState('');
 
-    const API_URL = 'https://sklad-petrovich-api.onrender.com';
+    // API_URL больше не нужен, используем fetchApi
 
     useEffect(() => {
         const fetchProductsToOrder = async () => {
             setIsLoadingStock(true);
             try {
-                // Используем наш готовый API с фильтром
-                const response = await fetch(`${API_URL}/products/?stock_status=low_stock`);
-                if (!response.ok) throw new Error('Ошибка загрузки отчета "К закупке"');
-
-                // --- ИСПРАВЛЕНИЕ ЗДЕСЬ ---
-                const data = await response.json(); // Сначала получаем объект
-                setProductsToOrder(data.items);   // А в состояние кладем только массив items
-                // --- КОНЕЦ ИСПРАВЛЕНИЯ ---
-
+                const data = await fetchApi('/products/?stock_status=low_stock');
+                setProductsToOrder(data.items);
             } catch (error: any) { toast.error(error.message); }
             finally { setIsLoadingStock(false); }
         };
@@ -70,7 +64,7 @@ export default function ReportsPage() {
         setIsLoadingProfit(true);
         setProfitReport(null);
 
-        let url = `${API_URL}/reports/profit?`;
+        let url = '/reports/profit?';
 
         // Определяем, какой фильтр использовать
         if (estimateIdFilter) {
@@ -84,12 +78,8 @@ export default function ReportsPage() {
         }
 
         try {
-            const response = await fetch(url);
-            if (!response.ok) {
-                const err = await response.json();
-                throw new Error(err.detail || "Ошибка загрузки отчета по прибыли");
-            }
-            setProfitReport(await response.json());
+            const data = await fetchApi(url);
+            setProfitReport(data);
         } catch (error: any) {
             toast.error(error.message);
         } finally {

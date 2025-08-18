@@ -6,6 +6,7 @@ import { useState, useEffect, FormEvent, useRef } from 'react';
 import toast from 'react-hot-toast';
 import Modal from '@/components/Modal';
 import { Plus, RefreshCw, Edit, Trash2, Upload, FileUp, Send, Search, ChevronLeft, ChevronRight, Star } from 'lucide-react';
+import { fetchApi } from '@/lib/api';
 
 interface Worker {
   id: number;
@@ -47,7 +48,7 @@ export default function WarehousePage() {
 
   const initialLoadInputRef = useRef<HTMLInputElement>(null);
   const supplierImportInputRef = useRef<HTMLInputElement>(null);
-  const API_URL = 'https://sklad-petrovich-api.onrender.com';
+  // API_URL больше не нужен, используем fetchApi
 
   useEffect(() => {
     const fetchProductsWithFilter = async () => {
@@ -58,12 +59,8 @@ export default function WarehousePage() {
         if (searchTerm) {
           params.append('search', searchTerm);
         }
-        const response = await fetch(`${API_URL}/products/?${params.toString()}`);
-        if (!response.ok) throw new Error('Ошибка сети при загрузке товаров');
-
-        const data = await response.json();
-
-        if (data && Array.isArray(data.items)) { // <-- ЭТА ПРОВЕРКА
+        const data = await fetchApi(`/products/?${params.toString()}`);
+        if (data && Array.isArray(data.items)) {
           setProducts(data.items);
           setTotalPages(Math.ceil(data.total / PAGE_SIZE));
         } else {
@@ -89,9 +86,9 @@ export default function WarehousePage() {
     ));
 
     try {
-      const response = await fetch(`${API_URL}/products/${productId}/toggle-favorite`, { method: 'PATCH' });
-      if (!response.ok) {
-        // Если сервер вернул ошибку, откатываем изменение в интерфейсе
+      try {
+        await fetchApi(`/products/${productId}/toggle-favorite`, { method: 'PATCH' });
+      } catch (error) {
         toast.error('Не удалось изменить статус "Избранное"');
         setProducts(originalProducts);
       }
@@ -127,9 +124,7 @@ export default function WarehousePage() {
         setError(null);
         try {
           const params = new URLSearchParams({ page: '1', size: String(PAGE_SIZE) });
-          const response = await fetch(`${API_URL}/products/?${params.toString()}`);
-          if (!response.ok) throw new Error('Ошибка сети');
-          const data = await response.json();
+          const data = await fetchApi(`/products/?${params.toString()}`);
           setProducts(data.items);
           setTotalPages(Math.ceil(data.total / PAGE_SIZE));
         } catch (err: any) { setError(err.message); }
@@ -147,8 +142,7 @@ export default function WarehousePage() {
     setIssueQuantity(1);
     if (workers.length === 0) {
       try {
-        const response = await fetch(`${API_URL}/workers/`);
-        const data: Worker[] = await response.json();
+        const data: Worker[] = await fetchApi('/workers/');
         setWorkers(data);
         if (data.length > 0) {
           setIssueWorkerId(String(data[0].id));
@@ -173,9 +167,7 @@ export default function WarehousePage() {
     formData.append('auto_create_new', 'true');
     const toastId = toast.loading('Импорт файла...');
     try {
-      const response = await fetch(`${API_URL}/actions/universal-import/`, { method: 'POST', body: formData });
-      const result = await response.json();
-      if (!response.ok) throw new Error(result.detail || 'Ошибка импорта');
+    const result = await fetchApi('/actions/universal-import/', { method: 'POST', body: formData });
       toast.success(`Импорт завершен! Создано: ${result.created?.length || 0}, Обновлено: ${result.updated?.length || 0}`, { id: toastId, duration: 6000 });
       forceRefresh();
     } catch (err: any) {
@@ -203,8 +195,7 @@ export default function WarehousePage() {
               const restoreToastId = toast.loading('Восстановление...');
               try {
                 // --- ИЗМЕНЕНИЕ: Вызываем эндпоинт восстановления ---
-                const response = await fetch(`${API_URL}/products/${productId}/restore`, { method: 'POST' });
-                if (!response.ok) throw new Error("Не удалось восстановить");
+              await fetchApi(`/products/${productId}/restore`, { method: 'POST' });
                 toast.success("Товар восстановлен!", { id: restoreToastId });
                 forceRefresh();
               } catch (e) {
@@ -224,8 +215,9 @@ export default function WarehousePage() {
 
     // Отправляем реальный запрос на удаление в фоне
     try {
-      const response = await fetch(`${API_URL}/products/${productId}`, { method: 'DELETE' });
-      if (!response.ok) {
+      try {
+        await fetchApi(`/products/${productId}`, { method: 'DELETE' });
+      } catch (error) {
         setProducts(originalProducts);
         toast.error("Не удалось удалить товар на сервере.");
         toast.dismiss(toastId);
@@ -245,12 +237,10 @@ export default function WarehousePage() {
     const productData = { name: formData.get('name') as string, internal_sku: formData.get('internal_sku') as string, unit: formData.get('unit') as string, stock_quantity: Number(formData.get('stock_quantity')), purchase_price: Number(formData.get('purchase_price')), retail_price: Number(formData.get('retail_price')), min_stock_level: Number(formData.get('min_stock_level')), supplier_sku: (formData.get('supplier_sku') as string) || null };
     console.log("ОТПРАВКА НА СЕРВЕР:", JSON.stringify(productData, null, 2));
 
-    const url = editingProduct ? `${API_URL}/products/${editingProduct.id}` : `${API_URL}/products/`;
+    const url = editingProduct ? `/products/${editingProduct.id}` : '/products/';
     const method = editingProduct ? 'PATCH' : 'POST';
-
     try {
-      const response = await fetch(url, { method, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(productData) });
-      if (!response.ok) throw new Error((await response.json()).detail || 'Ошибка сохранения');
+      await fetchApi(url, { method, body: JSON.stringify(productData) });
       toast.success(editingProduct ? 'Товар обновлен' : 'Товар создан', { id: toastId });
       setIsProductModalOpen(false);
       forceRefresh();
@@ -262,14 +252,10 @@ export default function WarehousePage() {
     if (!issueProduct || !issueWorkerId || issueQuantity <= 0) { toast.error("Проверьте данные"); return; }
     const toastId = toast.loading('Выдача товара...');
     try {
-      const response = await fetch(`${API_URL}/actions/issue-item/`, {
+      const movement = await fetchApi('/actions/issue-item/', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ /* ... */ })
       });
-      if (!response.ok) throw new Error((await response.json()).detail);
-
-      const movement = await response.json(); // Получаем созданное движение
 
       toast.success(t => (
         <div className="flex items-center gap-4">
@@ -297,7 +283,7 @@ export default function WarehousePage() {
 
   const handleQuickCancel = (movementId: number) => {
     toast.promise(
-      fetch(`${API_URL}/actions/history/cancel/${movementId}`, { method: 'POST' }),
+  fetchApi(`/actions/history/cancel/${movementId}`, { method: 'POST' }),
       {
         loading: 'Отмена...',
         success: () => {

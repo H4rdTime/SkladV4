@@ -2,6 +2,7 @@
 'use client';
 
 import { useState, useEffect, FormEvent } from 'react';
+import { fetchApi } from '@/lib/api';
 import { useRouter } from 'next/navigation';
 import toast from 'react-hot-toast';
 import { ArrowLeft, Download, Edit, Save } from 'lucide-react';
@@ -43,7 +44,7 @@ const ViewField = ({ label, value }: { label: string, value: any }) => (
 
 export default function ContractForm({ contractId }: ContractFormProps) {
     const router = useRouter();
-    const API_URL = 'https://sklad-petrovich-api.onrender.com';
+    // API_URL больше не нужен, используем fetchApi
 
     const [formData, setFormData] = useState<Partial<Contract>>({ status: 'В работе' });
     const [isLoading, setIsLoading] = useState(!!contractId);
@@ -54,11 +55,9 @@ export default function ContractForm({ contractId }: ContractFormProps) {
         if (isCreating) return;
         setIsLoading(true);
         try {
-            const response = await fetch(`${API_URL}/contracts/${contractId}`);
-            if (!response.ok) throw new Error("Не удалось загрузить договор");
-            const data = await response.json();
+            const data = await fetchApi(`/contracts/${contractId}`);
             setFormData(data);
-            if (data.status === 'Завершен') setIsEditing(false); // Если завершен, сразу открываем в режиме просмотра
+            if (data.status === 'Завершен') setIsEditing(false);
         } catch (error: any) {
             toast.error(error.message);
             router.push('/contracts');
@@ -78,19 +77,27 @@ export default function ContractForm({ contractId }: ContractFormProps) {
 
     const handleSave = async () => {
         const toastId = toast.loading('Сохранение...');
-        const url = isCreating ? `${API_URL}/contracts/` : `${API_URL}/contracts/${contractId}`;
-        const method = isCreating ? 'POST' : 'PATCH';
-
         try {
-            const response = await fetch(url, { method, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(formData) });
-            if (!response.ok) throw new Error((await response.json()).detail || 'Ошибка сохранения');
-            const savedContract = await response.json();
+            let savedContract;
+            if (isCreating) {
+                savedContract = await fetchApi('/contracts/', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(formData)
+                });
+            } else {
+                savedContract = await fetchApi(`/contracts/${contractId}`, {
+                    method: 'PATCH',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(formData)
+                });
+            }
             toast.success('Договор успешно сохранен!', { id: toastId });
             if (isCreating) {
-                router.push(`/contracts/${savedContract.id}`); // Переходим на страницу редактирования нового договора
+                router.push(`/contracts/${savedContract.id}`);
             } else {
-                setFormData(savedContract); // Обновляем данные на странице
-                setIsEditing(false); // Выходим из режима редактирования
+                setFormData(savedContract);
+                setIsEditing(false);
             }
         } catch (error: any) {
             toast.error(`Ошибка: ${error.message}`, { id: toastId });
@@ -106,10 +113,8 @@ export default function ContractForm({ contractId }: ContractFormProps) {
 
         const toastId = toast.loading('Списание и завершение...');
         try {
-            await fetch(`${API_URL}/contracts/${contractId}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(formData) });
-            const response = await fetch(`${API_URL}/contracts/${contractId}/write-off-pipes`, { method: 'POST' });
-            if (!response.ok) throw new Error((await response.json()).detail || 'Ошибка списания');
-            const updatedContract = await response.json();
+            await fetchApi(`/contracts/${contractId}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(formData) });
+            const updatedContract = await fetchApi(`/contracts/${contractId}/write-off-pipes`, { method: 'POST' });
             toast.success('Трубы списаны, договор завершен!', { id: toastId, duration: 4000 });
             setFormData(updatedContract);
             setIsEditing(false);
@@ -122,9 +127,7 @@ export default function ContractForm({ contractId }: ContractFormProps) {
         if (!confirm('Вернуть договор в работу? Это позволит редактировать данные. Списание труб НЕ будет отменено.')) return;
         const toastId = toast.loading('Возврат в работу...');
         try {
-            const response = await fetch(`${API_URL}/contracts/${contractId}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ status: 'В работе' }) });
-            if (!response.ok) throw new Error((await response.json()).detail);
-            const updatedContract = await response.json();
+            const updatedContract = await fetchApi(`/contracts/${contractId}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ status: 'В работе' }) });
             toast.success('Договор снова в работе.', { id: toastId });
             setFormData(updatedContract);
             setIsEditing(true);
@@ -136,7 +139,7 @@ export default function ContractForm({ contractId }: ContractFormProps) {
     const handleDownloadDocx = async () => {
         const toastId = toast.loading('Генерация документа...');
         try {
-            const response = await fetch(`${API_URL}/contracts/${contractId}/generate-docx`);
+            const response = await fetch(`/api/contracts/${contractId}/generate-docx`);
             if (!response.ok) throw new Error((await response.json()).detail || 'Ошибка генерации файла');
             const blob = await response.blob();
             const url = window.URL.createObjectURL(blob);

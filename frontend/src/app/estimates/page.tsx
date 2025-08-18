@@ -5,6 +5,7 @@ import { useState, useEffect, useRef } from 'react';
 import { Plus, Eye, Upload, Trash2, Search, ChevronLeft, ChevronRight } from 'lucide-react';
 import Link from 'next/link';
 import toast from 'react-hot-toast';
+import { fetchApi } from '@/lib/api';
 
 interface Estimate {
     id: number;
@@ -25,7 +26,7 @@ export default function EstimatesPage() {
     const [totalPages, setTotalPages] = useState(0);
     const PAGE_SIZE = 20;
 
-    const API_URL = 'https://sklad-petrovich-api.onrender.com';
+    // API_URL больше не нужен, используем fetchApi
 
     useEffect(() => {
         const fetchEstimates = async () => {
@@ -34,10 +35,7 @@ export default function EstimatesPage() {
                 const params = new URLSearchParams({ page: String(currentPage), size: String(PAGE_SIZE) });
                 if (searchTerm) params.append('search', searchTerm);
 
-                const response = await fetch(`${API_URL}/estimates/?${params.toString()}`);
-                if (!response.ok) throw new Error('Ошибка загрузки смет');
-                const data = await response.json();
-
+                const data = await fetchApi(`/estimates/?${params.toString()}`);
                 if (data && Array.isArray(data.items)) {
                     setEstimates(data.items);
                     setTotalPages(Math.ceil(data.total / PAGE_SIZE));
@@ -79,56 +77,16 @@ export default function EstimatesPage() {
 
         const toastId = toast.loading('Импорт сметы...');
         try {
-            const response = await fetch(`${API_URL}/actions/universal-import/`, {
-                method: 'POST',
-                body: formData,
-            });
-
-            // --- ОБНОВЛЕННАЯ ЛОГИКА ОБРАБОТКИ ОШИБОК ---
-            if (!response.ok) {
-                const errorData = await response.json();
-                const errorMessage = errorData.detail || 'Не удалось импортировать смету';
-
-                // Проверяем, является ли эта ошибка той самой, которую мы хотим обработать по-особому
-                if (typeof errorMessage === 'string' && errorMessage.startsWith('Товары с артикулами не найдены:')) {
-                    // Формируем красивое сообщение
-                    const friendlyMessage = (
-                        <div>
-                            <h4 className="font-bold text-lg mb-2">Товары не найдены на складе!</h4>
-                            <p className="mb-2">Некоторые товары из файла отсутствуют в вашей базе данных.</p>
-                            <p className="font-semibold">Что делать?</p>
-                            <ol className="list-decimal list-inside text-sm">
-                                <li>Перейдите на страницу <strong>"Склад"</strong>.</li>
-                                <li>Нажмите кнопку <strong>"Пополнить"</strong>.</li>
-                                <li>Загрузите этот же файл, чтобы добавить новые товары на склад.</li>
-                                <li>Вернитесь сюда и повторите импорт сметы.</li>
-                            </ol>
-                        </div>
-                    );
-                    // Показываем кастомное уведомление. Увеличиваем длительность, чтобы пользователь успел прочитать.
-                    toast.error(friendlyMessage, { id: toastId, duration: 15000 });
-
-                } else {
-                    // Если это любая другая ошибка, показываем ее как обычно
-                    throw new Error(errorMessage);
-                }
+            await fetchApi('/actions/universal-import/', { method: 'POST', body: formData });
+            toast.success('Смета успешно импортирована!', { id: toastId });
+            if (currentPage !== 1) {
+                setCurrentPage(1);
             } else {
-                // Если все хорошо
-                toast.success('Смета успешно импортирована!', { id: toastId });
-                // Обновляем список смет
-                if (currentPage !== 1) {
-                    setCurrentPage(1);
-                } else {
-                    // "Дергаем" состояние, чтобы вызвать useEffect и обновить данные
-                    setSearchTerm(prev => prev === '' ? ' ' : '');
-                    setTimeout(() => setSearchTerm(''), 10);
-                }
+                setSearchTerm(prev => prev === '' ? ' ' : '');
+                setTimeout(() => setSearchTerm(''), 10);
             }
         } catch (err: any) {
-            // Этот блок теперь будет ловить только "неожиданные" ошибки
-            if (err.message) { // Проверяем, что в toast не передается "пустота"
-                toast.error(`Ошибка: ${err.message}`, { id: toastId });
-            }
+            toast.error(`Ошибка: ${err.message}`, { id: toastId });
         } finally {
             if (fileInputRef.current) {
                 fileInputRef.current.value = '';
@@ -140,18 +98,10 @@ export default function EstimatesPage() {
         if (confirm('Вы уверены, что хотите удалить эту смету?')) {
             const toastId = toast.loading('Удаление сметы...');
             try {
-                const response = await fetch(`${API_URL}/estimates/${estimateId}`, {
-                    method: 'DELETE',
-                });
-                if (!response.ok) {
-                    const errorData = await response.json();
-                    throw new Error(errorData.detail || 'Не удалось удалить смету');
-                }
+                await fetchApi(`/estimates/${estimateId}`, { method: 'DELETE' });
                 toast.success('Смета успешно удалена.', { id: toastId });
-
-                // Триггерим обновление списка
                 if (currentPage !== 1) setCurrentPage(1);
-                else setSearchTerm(prev => prev); // "дергаем" состояние, чтобы вызвать useEffect
+                else setSearchTerm(prev => prev);
             } catch (err: any) {
                 toast.error(`Ошибка: ${err.message}`, { id: toastId });
             }
