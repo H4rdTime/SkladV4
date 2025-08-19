@@ -165,12 +165,13 @@ export default function EstimatesPage() {
                         </thead>
                         <tbody className="divide-y divide-gray-200">
                             {isLoading ? (
-                                <tr><td colSpan={6} className="text-center py-10 text-gray-500">Загрузка...</td></tr>
+                                <tr><td colSpan={7} className="text-center py-10 text-gray-500">Загрузка...</td></tr>
                             ) : estimates.length === 0 ? (
-                                <tr><td colSpan={6} className="text-center py-10 text-gray-500">Сметы не найдены.</td></tr>
+                                <tr><td colSpan={7} className="text-center py-10 text-gray-500">Сметы не найдены.</td></tr>
                             ) : (
                                 estimates.map(estimate => (
                                     <tr key={estimate.id} className="hover:bg-gray-50">
+                                        <td className="py-3 px-4 text-gray-500 font-mono">{estimate.id}</td>
                                         <td className="py-3 px-4 font-medium">{estimate.estimate_number}</td>
                                         <td className="py-3 px-4 text-gray-500">{formatDate(estimate.created_at)}</td>
                                         <td className="py-3 px-4">{estimate.client_name}</td>
