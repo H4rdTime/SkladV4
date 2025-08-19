@@ -6,7 +6,7 @@ import { fetchApi } from '@/lib/api';
 import { useRouter } from 'next/navigation';
 import toast from 'react-hot-toast';
 // --- 1. ДОБАВЛЯЕМ ИКОНКИ FileText и Star ---
-import { ArrowLeft, Plus, Trash2, Truck, CheckCircle, FileText, Star } from 'lucide-react'; 
+import { ArrowLeft, Plus, Trash2, Truck, CheckCircle, FileText, Star } from 'lucide-react';
 import Modal from '@/components/Modal';
 
 // Типы данных
@@ -112,21 +112,21 @@ export default function EstimateForm({ estimateId }: EstimateFormProps) {
   const handleDownloadKP = async () => {
     if (!estimateId) return;
     const toastId = toast.loading('Генерация КП...');
-  try {
-    const response = await fetchApi(`/api/estimates/${estimateId}/generate-commercial-proposal`);
-    const blob = await response.blob();
-    const url = window.URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = `KP_${estimateData.number}.docx`;
-    document.body.appendChild(a);
-    a.click();
-    a.remove();
-    window.URL.revokeObjectURL(url);
-    toast.success('Коммерческое предложение готово!', { id: toastId });
-  } catch (error: any) {
-    toast.error(`Ошибка: ${error.message}`, { id: toastId });
-  }
+    try {
+      const response = await fetchApi(`/api/estimates/${estimateId}/generate-commercial-proposal`);
+      const blob = await response.blob();
+      const url = window.URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `KP_${estimateData.number}.docx`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      window.URL.revokeObjectURL(url);
+      toast.success('Коммерческое предложение готово!', { id: toastId });
+    } catch (error: any) {
+      toast.error(`Ошибка: ${error.message}`, { id: toastId });
+    }
   };
   // --- КОНЕЦ НОВОЙ ФУНКЦИИ ---
 
@@ -208,7 +208,10 @@ export default function EstimateForm({ estimateId }: EstimateFormProps) {
       <form onSubmit={handleSubmit}>
         <div className="bg-white p-6 rounded-lg shadow-md mb-6">
           <div className="flex justify-between items-center mb-4">
-            <h1 className="text-3xl font-bold text-gray-800">{isCreating ? 'Новая смета' : `Смета №${estimateData.number}`}</h1>
+            <h1 className="text-3xl font-bold text-gray-800 mb-4">
+              {isCreating ? 'Новая смета' : `Смета №${estimateData.number}`}
+              {!isCreating && <span className="ml-4 text-lg font-normal text-gray-400">(ID: {estimateId})</span>}
+            </h1>
             {!isCreating && (
               <div>
                 <label className="text-sm font-medium">Статус: </label>
@@ -296,15 +299,15 @@ export default function EstimateForm({ estimateId }: EstimateFormProps) {
           </div>
           <div className="flex justify-between items-center mt-6 pt-4 border-t">
             <div className="flex flex-wrap gap-2">
-               {/* --- 3. ДОБАВЛЕНА НОВАЯ КНОПКА --- */}
+              {/* --- 3. ДОБАВЛЕНА НОВАЯ КНОПКА --- */}
               {!isCreating && (
-                  <button
-                      type="button"
-                      onClick={handleDownloadKP}
-                      className="flex items-center gap-2 px-4 py-2 bg-purple-600 text-white rounded-md hover:bg-purple-700"
-                  >
-                      <FileText size={18} /> Сформировать КП
-                  </button>
+                <button
+                  type="button"
+                  onClick={handleDownloadKP}
+                  className="flex items-center gap-2 px-4 py-2 bg-purple-600 text-white rounded-md hover:bg-purple-700"
+                >
+                  <FileText size={18} /> Сформировать КП
+                </button>
               )}
               {status === 'Утверждена' && <button type="button" onClick={openShipModal} className="flex items-center gap-2 px-4 py-2 bg-orange-500 text-white rounded-md hover:bg-orange-600"><Truck size={18} /> Отгрузить</button>}
               {status === 'В работе' && <button type="button" onClick={openAddItemsModal} className="flex items-center gap-2 px-4 py-2 bg-cyan-500 text-white rounded-md hover:bg-cyan-600"><Plus size={18} /> Довыдать</button>}
@@ -333,26 +336,26 @@ export default function EstimateForm({ estimateId }: EstimateFormProps) {
           </div>
         </div>
       </Modal>
-      
+
       <Modal isOpen={isAddItemsModalOpen} onClose={() => setIsAddItemsModalOpen(false)} title="Довыдача товаров">
         <div className="space-y-4">
           <div className="relative">
-            <input 
-              type="text" 
-              placeholder="Кликните для выбора или начните поиск..." 
-              value={searchTerm} 
+            <input
+              type="text"
+              placeholder="Кликните для выбора или начните поиск..."
+              value={searchTerm}
               onChange={e => setSearchTerm(e.target.value)}
-              onFocus={() => setIsSearchFocused(true)} 
+              onFocus={() => setIsSearchFocused(true)}
               onBlur={() => setTimeout(() => setIsSearchFocused(false), 200)}
-              className="w-full border p-2 rounded-md" 
+              className="w-full border p-2 rounded-md"
             />
             {(isSearchFocused || searchResults.length > 0) && (
               <ul className="absolute z-20 w-full bg-white border rounded-md mt-1 max-h-40 overflow-y-auto shadow-lg">
                 {searchResults.length > 0 ? (
                   searchResults.map(product => (
-                    <li 
-                      key={product.id} 
-                      onMouseDown={() => addItemToAdditionList(product)} 
+                    <li
+                      key={product.id}
+                      onMouseDown={() => addItemToAdditionList(product)}
                       className="p-2 hover:bg-gray-100 cursor-pointer flex justify-between items-center"
                     >
                       <span>{product.name}</span>

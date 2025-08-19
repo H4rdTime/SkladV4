@@ -154,6 +154,7 @@ export default function EstimatesPage() {
                     <table className="min-w-full text-sm">
                         <thead className="bg-gray-100 border-b-2 border-gray-200">
                             <tr>
+                                <th className="py-3 px-4 text-left font-semibold text-gray-600">ID</th>
                                 <th className="py-3 px-4 text-left font-semibold text-gray-600 uppercase tracking-wider">Номер</th>
                                 <th className="py-3 px-4 text-left font-semibold text-gray-600 uppercase tracking-wider">Дата</th>
                                 <th className="py-3 px-4 text-left font-semibold text-gray-600 uppercase tracking-wider">Клиент</th>
