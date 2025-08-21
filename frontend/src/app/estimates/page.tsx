@@ -1,4 +1,3 @@
-// frontend/src/app/estimates/page.tsx
 'use client';
 
 import { useState, useEffect, useRef } from 'react';
@@ -19,14 +18,17 @@ interface Estimate {
 export default function EstimatesPage() {
     const [estimates, setEstimates] = useState<Estimate[]>([]);
     const [isLoading, setIsLoading] = useState(true);
-    const fileInputRef = useRef<HTMLInputElement>(null);
+    
+    // --- ИЗМЕНЕНИЯ: Отдельные refs и состояние загрузки для каждой кнопки ---
+    const fileInputPetrovichRef = useRef<HTMLInputElement>(null);
+    const fileInput1cRef = useRef<HTMLInputElement>(null);
+    const [isUploading1c, setIsUploading1c] = useState(false);
+    // ---
 
     const [searchTerm, setSearchTerm] = useState('');
     const [currentPage, setCurrentPage] = useState(1);
     const [totalPages, setTotalPages] = useState(0);
     const PAGE_SIZE = 20;
-
-    // API_URL больше не нужен, используем fetchApi
 
     useEffect(() => {
         const fetchEstimates = async () => {
@@ -65,7 +67,8 @@ export default function EstimatesPage() {
         if (newPage > 0 && newPage <= totalPages) setCurrentPage(newPage);
     };
 
-    const handleFileImport = async (event: React.ChangeEvent<HTMLInputElement>) => {
+    // --- ИЗМЕНЕНИЕ: Переименовали функцию для ясности ---
+    const handlePetrovichFileImport = async (event: React.ChangeEvent<HTMLInputElement>) => {
         const file = event.target.files?.[0];
         if (!file) return;
 
@@ -88,8 +91,44 @@ export default function EstimatesPage() {
         } catch (err: any) {
             toast.error(`Ошибка: ${err.message}`, { id: toastId });
         } finally {
-            if (fileInputRef.current) {
-                fileInputRef.current.value = '';
+            if (fileInputPetrovichRef.current) {
+                fileInputPetrovichRef.current.value = '';
+            }
+        }
+    };
+    
+    // --- НОВАЯ ФУНКЦИЯ для импорта из 1С ---
+    const handle1cFileImport = async (event: React.ChangeEvent<HTMLInputElement>) => {
+        const file = event.target.files?.[0];
+        if (!file) return;
+
+        setIsUploading1c(true);
+        const formData = new FormData();
+        formData.append('file', file); // Отправляем только файл
+
+        const toastId = toast.loading('Импорт сметы из 1С...');
+        try {
+            // Вызываем новый эндпоинт
+            const result = await fetchApi('/actions/import-1c-estimate/', {
+                method: 'POST',
+                body: formData,
+            });
+            
+            toast.success(`Смета "${result.estimate_number}" успешно импортирована!`, { id: toastId });
+            
+            // Обновляем список
+            if (currentPage !== 1) {
+                setCurrentPage(1);
+            } else {
+                setSearchTerm(prev => prev === '' ? ' ' : '');
+                setTimeout(() => setSearchTerm(''), 10);
+            }
+        } catch (err: any) {
+            toast.error(`Ошибка: ${err.message}`, { id: toastId });
+        } finally {
+            setIsUploading1c(false);
+            if (fileInput1cRef.current) {
+                fileInput1cRef.current.value = '';
             }
         }
     };
@@ -100,8 +139,12 @@ export default function EstimatesPage() {
             try {
                 await fetchApi(`/estimates/${estimateId}`, { method: 'DELETE' });
                 toast.success('Смета успешно удалена.', { id: toastId });
-                if (currentPage !== 1) setCurrentPage(1);
-                else setSearchTerm(prev => prev);
+                // Обновляем список после удаления
+                const debounceTimer = setTimeout(() => { 
+                    if (currentPage !== 1) setCurrentPage(1);
+                    else setSearchTerm(prev => prev + ' '); // триггер для useEffect
+                 }, 300);
+                 return () => clearTimeout(debounceTimer);
             } catch (err: any) {
                 toast.error(`Ошибка: ${err.message}`, { id: toastId });
             }
@@ -114,20 +157,41 @@ export default function EstimatesPage() {
         <main className="container mx-auto p-4 sm:p-6 lg:p-8">
             <div className="flex justify-between items-center mb-6">
                 <h1 className="text-3xl font-bold text-gray-800">Сметы</h1>
-                <div className="flex space-x-2">
+                <div className="flex flex-wrap items-center gap-2">
+                    {/* --- ИЗМЕНЕНИЯ: Два отдельных input'а --- */}
                     <input
                         type="file"
-                        ref={fileInputRef}
-                        onChange={handleFileImport}
+                        ref={fileInputPetrovichRef}
+                        onChange={handlePetrovichFileImport}
                         className="hidden"
                         accept=".xlsx,.xls"
                     />
+                     <input
+                        type="file"
+                        ref={fileInput1cRef}
+                        onChange={handle1cFileImport}
+                        className="hidden"
+                        accept=".xls"
+                    />
+                    
+                    {/* --- Кнопка Петровича привязана к своему ref'у --- */}
                     <button
-                        onClick={() => fileInputRef.current?.click()}
+                        onClick={() => fileInputPetrovichRef.current?.click()}
                         className="flex items-center gap-2 px-4 py-2 bg-purple-500 text-white rounded-md hover:bg-purple-600"
                     >
                         <Upload size={18} /> Импорт (Петрович)
                     </button>
+
+                    {/* --- Кнопка 1С привязана к своему ref'у и состоянию загрузки --- */}
+                    <button
+                        onClick={() => fileInput1cRef.current?.click()}
+                        disabled={isUploading1c}
+                        className="flex items-center gap-2 px-4 py-2 bg-yellow-500 text-black rounded-md hover:bg-yellow-600 disabled:bg-gray-400"
+                    >
+                        <Upload size={18} />
+                        {isUploading1c ? 'Загрузка...' : 'Импорт (1С)'}
+                    </button>
+
                     <Link href="/estimates/new" className="flex items-center gap-2 px-4 py-2 bg-green-500 text-white rounded-md hover:bg-green-600">
                         <Plus size={18} /> Создать смету
                     </Link>
