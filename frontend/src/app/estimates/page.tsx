@@ -13,6 +13,8 @@ interface Estimate {
     location: string | null;
     status: string;
     created_at: string;
+    worker_id?: number | null;
+    shipped_at?: string | null;
 }
 
 export default function EstimatesPage() {
@@ -29,34 +31,53 @@ export default function EstimatesPage() {
     const [currentPage, setCurrentPage] = useState(1);
     const [totalPages, setTotalPages] = useState(0);
     const PAGE_SIZE = 20;
+    const [workersMap, setWorkersMap] = useState<Record<number, string>>({});
+
+    // Reusable loader so we can call it from handlers (delete/import) to avoid brittle state hacks
+    const fetchEstimates = async (page: number, search: string) => {
+        setIsLoading(true);
+        try {
+            const params = new URLSearchParams({ page: String(page), size: String(PAGE_SIZE) });
+            if (search) params.append('search', search);
+
+            const data = await fetchApi(`/estimates/?${params.toString()}`);
+            if (data && Array.isArray(data.items)) {
+                setEstimates(data.items);
+                setTotalPages(Math.ceil(data.total / PAGE_SIZE));
+            } else {
+                setEstimates([]);
+                setTotalPages(0);
+                toast.error("Получен неожиданный формат данных от API смет.");
+            }
+
+        } catch (error: any) {
+            toast.error(error.message || "Не удалось загрузить сметы.");
+        } finally {
+            setIsLoading(false);
+        }
+    };
 
     useEffect(() => {
-        const fetchEstimates = async () => {
-            setIsLoading(true);
-            try {
-                const params = new URLSearchParams({ page: String(currentPage), size: String(PAGE_SIZE) });
-                if (searchTerm) params.append('search', searchTerm);
-
-                const data = await fetchApi(`/estimates/?${params.toString()}`);
-                if (data && Array.isArray(data.items)) {
-                    setEstimates(data.items);
-                    setTotalPages(Math.ceil(data.total / PAGE_SIZE));
-                } else {
-                    setEstimates([]);
-                    setTotalPages(0);
-                    toast.error("Получен неожиданный формат данных от API смет.");
-                }
-
-            } catch (error: any) {
-                toast.error(error.message || "Не удалось загрузить сметы.");
-            } finally {
-                setIsLoading(false);
-            }
-        };
-
-        const debounceTimer = setTimeout(() => { fetchEstimates(); }, 300);
+        const debounceTimer = setTimeout(() => { fetchEstimates(currentPage, searchTerm); }, 300);
         return () => clearTimeout(debounceTimer);
     }, [currentPage, searchTerm]);
+
+    // Load workers once so we can show worker names next to shipped date
+    useEffect(() => {
+        const fetchWorkers = async () => {
+            try {
+                const data = await fetchApi('/workers/');
+                if (Array.isArray(data)) {
+                    const map: Record<number, string> = {};
+                    data.forEach((w: any) => { if (w && typeof w.id === 'number') map[w.id] = w.name; });
+                    setWorkersMap(map);
+                }
+            } catch (err) {
+                // non-blocking: если не удалось загрузить, просто оставим пустой map
+            }
+        };
+        fetchWorkers();
+    }, []);
 
     const handleSearchChange = (term: string) => {
         setSearchTerm(term);
@@ -82,12 +103,9 @@ export default function EstimatesPage() {
         try {
             await fetchApi('/actions/universal-import/', { method: 'POST', body: formData });
             toast.success('Смета успешно импортирована!', { id: toastId });
-            if (currentPage !== 1) {
-                setCurrentPage(1);
-            } else {
-                setSearchTerm(prev => prev === '' ? ' ' : '');
-                setTimeout(() => setSearchTerm(''), 10);
-            }
+            // Перезагружаем список после успешного импорта
+            setCurrentPage(1);
+            await fetchEstimates(1, '');
         } catch (err: any) {
             toast.error(`Ошибка: ${err.message}`, { id: toastId });
         } finally {
@@ -116,13 +134,9 @@ export default function EstimatesPage() {
             
             toast.success(`Смета "${result.estimate_number}" успешно импортирована!`, { id: toastId });
             
-            // Обновляем список
-            if (currentPage !== 1) {
-                setCurrentPage(1);
-            } else {
-                setSearchTerm(prev => prev === '' ? ' ' : '');
-                setTimeout(() => setSearchTerm(''), 10);
-            }
+            // Обновляем список: переключаем на страницу 1 и явно перезагружаем
+            setCurrentPage(1);
+            await fetchEstimates(1, '');
         } catch (err: any) {
             toast.error(`Ошибка: ${err.message}`, { id: toastId });
         } finally {
@@ -139,12 +153,12 @@ export default function EstimatesPage() {
             try {
                 await fetchApi(`/estimates/${estimateId}`, { method: 'DELETE' });
                 toast.success('Смета успешно удалена.', { id: toastId });
-                // Обновляем список после удаления
-                const debounceTimer = setTimeout(() => { 
-                    if (currentPage !== 1) setCurrentPage(1);
-                    else setSearchTerm(prev => prev + ' '); // триггер для useEffect
-                 }, 300);
-                 return () => clearTimeout(debounceTimer);
+                // Оптимистично убираем удалённую смету из списка, чтобы избежать мерцания
+                setEstimates(prev => prev.filter(e => e.id !== estimateId));
+                // Затем синхронизируем с сервером — подстраховка на случай пагинации/фильтров
+                const pageToLoad = currentPage === 1 ? 1 : 1;
+                setCurrentPage(pageToLoad);
+                await fetchEstimates(pageToLoad, searchTerm);
             } catch (err: any) {
                 toast.error(`Ошибка: ${err.message}`, { id: toastId });
             }
@@ -224,6 +238,7 @@ export default function EstimatesPage() {
                                 <th className="py-3 px-4 text-left font-semibold text-gray-600 uppercase tracking-wider">Клиент</th>
                                 <th className="py-3 px-4 text-left font-semibold text-gray-600 uppercase tracking-wider">Объект</th>
                                 <th className="py-3 px-4 text-left font-semibold text-gray-600 uppercase tracking-wider">Статус</th>
+                                <th className="py-3 px-4 text-left font-semibold text-gray-600 uppercase tracking-wider">Отгружено</th>
                                 <th className="py-3 px-4 text-center font-semibold text-gray-600 uppercase tracking-wider">Действия</th>
                             </tr>
                         </thead>
@@ -244,6 +259,12 @@ export default function EstimatesPage() {
                                             <span className="px-2 py-1 text-xs font-semibold text-green-800 bg-green-100 rounded-full">
                                                 {estimate.status}
                                             </span>
+                                        </td>
+                                        <td className="py-3 px-4 text-gray-600">
+                                            <div>
+                                                <div>{estimate.shipped_at ? formatDate(estimate.shipped_at) : <span className="text-gray-400">—</span>}</div>
+                                                {estimate.worker_id ? <div className="text-sm text-gray-500">{workersMap[estimate.worker_id] || `Работник #${estimate.worker_id}`}</div> : null}
+                                            </div>
                                         </td>
                                         <td className="py-3 px-4 text-center">
                                             <div className="flex justify-center items-center space-x-2">

@@ -44,6 +44,7 @@ export default function ReportsPage() {
     const [startDate, setStartDate] = useState(new Date(new Date().setDate(1)).toISOString().split('T')[0]);
     const [endDate, setEndDate] = useState(new Date().toISOString().split('T')[0]);
     const [estimateIdFilter, setEstimateIdFilter] = useState('');
+    const [includeInProgress, setIncludeInProgress] = useState(false);
 
     // API_URL больше не нужен, используем fetchApi
 
@@ -52,7 +53,10 @@ export default function ReportsPage() {
             setIsLoadingStock(true);
             try {
                 const data = await fetchApi('/products/?stock_status=low_stock');
-                setProductsToOrder(data.items);
+                // Ensure we have an array, sort from largest stock_quantity -> smallest (0 last)
+                const items: ProductToOrder[] = Array.isArray(data.items) ? data.items : [];
+                items.sort((a, b) => b.stock_quantity - a.stock_quantity);
+                setProductsToOrder(items);
             } catch (error: any) { toast.error(error.message); }
             finally { setIsLoadingStock(false); }
         };
@@ -78,6 +82,7 @@ export default function ReportsPage() {
         }
 
         try {
+            if (includeInProgress) url += `${url.endsWith('?') ? '' : '&'}include_in_progress=true`;
             const data = await fetchApi(url);
             setProfitReport(data);
         } catch (error: any) {
@@ -98,7 +103,8 @@ export default function ReportsPage() {
                         <h2 className="text-xl font-semibold text-gray-700">Товары к закупке</h2>
                     </div>
                     <div className="overflow-x-auto">
-                        <table className="min-w-full text-sm">
+                        <div className="max-h-96 overflow-y-auto"> {/* ограничиваем высоту блока и включаем вертикальный скролл */}
+                            <table className="min-w-full text-sm">
                             <thead className="bg-gray-50 border-b-2 border-gray-200">
                                 <tr>
                                     <th className="py-3 px-4 text-left font-semibold text-gray-600">Наименование</th>
@@ -121,7 +127,8 @@ export default function ReportsPage() {
                                     ))
                                 )}
                             </tbody>
-                        </table>
+                            </table>
+                        </div>
                     </div>
                 </div>
 
@@ -141,6 +148,12 @@ export default function ReportsPage() {
                             <div className="flex items-center gap-2">
                                 <label htmlFor="end-date" className="text-sm">По:</label>
                                 <input type="date" id="end-date" value={endDate} onChange={e => setEndDate(e.target.value)} className="ml-2 p-1 border rounded-md" />
+                            </div>
+                            <div className="flex items-center gap-2">
+                                <label className="inline-flex items-center text-sm">
+                                    <input type="checkbox" className="mr-2" checked={includeInProgress} onChange={e => setIncludeInProgress(e.target.checked)} />
+                                    Включать сметы "В работе"
+                                </label>
                             </div>
                         </div>
                         <div className="flex items-center gap-2">

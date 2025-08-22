@@ -31,6 +31,7 @@ export default function EstimateForm({ estimateId }: EstimateFormProps) {
   const [isSearchFocused, setIsSearchFocused] = useState(false);
 
   const [isShipModalOpen, setIsShipModalOpen] = useState(false);
+  const [isShipAction, setIsShipAction] = useState(false);
   const [isAddItemsModalOpen, setIsAddItemsModalOpen] = useState(false);
   const [workers, setWorkers] = useState<Worker[]>([]);
   const [selectedWorkerId, setSelectedWorkerId] = useState<string>('');
@@ -132,12 +133,16 @@ export default function EstimateForm({ estimateId }: EstimateFormProps) {
 
   const openShipModal = async () => {
     try {
-      const data = await fetchApi(`/workers/`);
-      setWorkers(data);
-      if (data.length > 0) { setSelectedWorkerId(String(data[0].id)); setIsShipModalOpen(true); }
+      // Всегда открываем модал для реальной отгрузки (списание со склада).
+      const workersData = await fetchApi(`/workers/`);
+      setWorkers(workersData);
+      setIsShipAction(true);
+      if (workersData.length > 0) { setSelectedWorkerId(String(workersData[0].id)); setIsShipModalOpen(true); }
       else { toast.error('Сначала добавьте работников.'); }
     } catch (error) { toast.error('Не удалось загрузить работников.'); }
   };
+
+  // ...existing code...
 
   const handleShipEstimate = async () => {
     const toastId = toast.loading('Выполняется отгрузка...');
@@ -149,12 +154,32 @@ export default function EstimateForm({ estimateId }: EstimateFormProps) {
     } catch (err: any) { toast.error(`Ошибка: ${err.message}`, { id: toastId }); }
   };
 
+  const handleAssignWorker = async () => {
+    const toastId = toast.loading('Привязка работника...');
+    try {
+      await fetchApi(`/estimates/${estimateId}/assign-worker?worker_id=${selectedWorkerId}`, { method: 'POST' });
+      toast.success('Работник привязан к смете.', { id: toastId });
+      setIsShipModalOpen(false);
+      fetchEstimate();
+    } catch (err: any) { toast.error(`Ошибка: ${err.message}`, { id: toastId }); }
+  };
+
   const handleComplete = async () => {
     if (!confirm('Завершить смету? Будет произведено финальное списание.')) return;
     const toastId = toast.loading('Завершение сметы...');
     try {
       await fetchApi(`/estimates/${estimateId}/complete`, { method: 'POST' });
       toast.success('Смета успешно завершена!', { id: toastId });
+      fetchEstimate();
+    } catch (err: any) { toast.error(`Ошибка: ${err.message}`, { id: toastId }); }
+  };
+
+  const handleCancelCompletion = async () => {
+    if (!confirm('Отменить завершение сметы и вернуть списанные товары на склад?')) return;
+    const toastId = toast.loading('Отмена завершения...');
+    try {
+      await fetchApi(`/estimates/${estimateId}/cancel-completion`, { method: 'POST' });
+      toast.success('Завершение сметы отменено. Остатки восстановлены.', { id: toastId });
       fetchEstimate();
     } catch (err: any) { toast.error(`Ошибка: ${err.message}`, { id: toastId }); }
   };
@@ -310,8 +335,10 @@ export default function EstimateForm({ estimateId }: EstimateFormProps) {
                 </button>
               )}
               {status === 'Утверждена' && <button type="button" onClick={openShipModal} className="flex items-center gap-2 px-4 py-2 bg-orange-500 text-white rounded-md hover:bg-orange-600"><Truck size={18} /> Отгрузить</button>}
+              {/* Убрана отдельная кнопка "Пометить как отгруженную" — используем единую кнопку Отгрузить */}
               {status === 'В работе' && <button type="button" onClick={openAddItemsModal} className="flex items-center gap-2 px-4 py-2 bg-cyan-500 text-white rounded-md hover:bg-cyan-600"><Plus size={18} /> Довыдать</button>}
               {status === 'В работе' && <button type="button" onClick={handleComplete} className="flex items-center gap-2 px-4 py-2 bg-teal-500 text-white rounded-md hover:bg-teal-600"><CheckCircle size={18} /> Завершить</button>}
+              {status === 'Выполнена' && <button type="button" onClick={handleCancelCompletion} className="flex items-center gap-2 px-4 py-2 bg-red-500 text-white rounded-md hover:bg-red-600"><ArrowLeft size={18} /> Отменить выполнение</button>}
             </div>
             <div className="flex items-center">
               <div className="text-right mr-4">
@@ -332,7 +359,11 @@ export default function EstimateForm({ estimateId }: EstimateFormProps) {
           </select>
           <div className="flex justify-end pt-4">
             <button type="button" onClick={() => setIsShipModalOpen(false)} className="px-4 py-2 bg-gray-200 rounded-md mr-2">Отмена</button>
-            <button type="button" onClick={handleShipEstimate} className="px-4 py-2 bg-blue-500 text-white rounded-md">Подтвердить</button>
+            {/* Используем явный флаг isShipAction, основанный на свежих данных с сервера, чтобы
+                не полагаться на потенциально устаревший локальный state 'status'. */}
+            <button type="button" onClick={isShipAction ? handleShipEstimate : handleAssignWorker} className="px-4 py-2 bg-blue-500 text-white rounded-md">
+              {isShipAction ? 'Отгрузить (спишет со склада)' : 'Привязать (без списания)'}
+            </button>
           </div>
         </div>
       </Modal>

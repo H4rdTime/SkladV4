@@ -3,8 +3,12 @@
 from datetime import datetime
 from typing import List, Optional
 from enum import Enum
+from pydantic import ConfigDict  # <-- ДОБАВЬТЕ ЭТОТ ИМПОРТ
 
 from sqlmodel import Field, SQLModel, Relationship
+from uuid import UUID as PythonUUID
+from sqlalchemy.dialects.postgresql import UUID as SQLAlchemyUUID
+from sqlalchemy import Column, ForeignKey
 
 # --- Перечисления (Enums) для стандартизации полей ---
 
@@ -44,8 +48,6 @@ class Worker(SQLModel, table=True):
 class Product(SQLModel, table=True):
     """Таблица товаров на складе"""
     id: Optional[int] = Field(default=None, primary_key=True)
-
-    # --- НОВОЕ ПОЛЕ ---
     is_favorite: bool = Field(default=False, index=True)
     is_deleted: bool = Field(default=False, index=True)
     internal_sku: str = Field(unique=True, index=True)
@@ -63,17 +65,12 @@ class Product(SQLModel, table=True):
 class StockMovement(SQLModel, table=True):
     """Таблица истории всех движений товаров"""
     id: Optional[int] = Field(default=None, primary_key=True)
-
     quantity: float
     type: MovementTypeEnum
-    # Остаток на складе ПОСЛЕ операции
     stock_after: Optional[float] = Field(default=None)
-
     product_id: int = Field(foreign_key="product.id")
     worker_id: Optional[int] = Field(default=None, foreign_key="worker.id")
-
     timestamp: datetime = Field(default_factory=datetime.utcnow)
-
     product: Product = Relationship(back_populates="stock_movements")
     worker: Optional[Worker] = Relationship(back_populates="stock_movements")
 
@@ -92,14 +89,10 @@ class EstimateItem(SQLModel, table=True):
     """Строка в смете (один товар/услуга)"""
     id: Optional[int] = Field(default=None, primary_key=True)
     quantity: float
-    unit_price: float  # Цена за единицу на момент создания сметы
-
-    # Связи
+    unit_price: float
     estimate_id: int = Field(foreign_key="estimate.id")
     product_id: int = Field(foreign_key="product.id")
-
     estimate: "Estimate" = Relationship(back_populates="items")
-    # Односторонняя связь, нам не нужно знать из товара, в каких он сметах
     product: Product = Relationship()
 
 
@@ -108,15 +101,19 @@ class Estimate(SQLModel, table=True):
     id: Optional[int] = Field(default=None, primary_key=True)
     estimate_number: str = Field(index=True)
     client_name: str
-    location: Optional[str] = None  # Адрес объекта
-
+    location: Optional[str] = None
     status: EstimateStatusEnum = Field(default=EstimateStatusEnum.DRAFT)
     created_at: datetime = Field(default_factory=datetime.utcnow)
+    # user_id previously referenced external auth.users table which may not exist in this DB.
+    # Keep a simple UUID field without a foreign key constraint to avoid SQLAlchemy errors when
+    # the external auth schema is not available.
+    user_id: Optional[PythonUUID] = Field(default=None)
 
-    # Связи
     worker_id: Optional[int] = Field(default=None, foreign_key="worker.id")
-
+    # Записываем время отгрузки (shipped) — nullable, заполняется при отгрузке сметы
+    shipped_at: Optional[datetime] = None
     items: List[EstimateItem] = Relationship(back_populates="estimate")
+    model_config = ConfigDict(arbitrary_types_allowed=True)
 
 
 class ContractStatusEnum(str, Enum):
@@ -129,7 +126,6 @@ class ContractStatusEnum(str, Enum):
 class ContractTypeEnum(str, Enum):
     DRILLING = "Бурение скважины"
     PUMPING = "Монтаж насосного оборудования"
-    # При необходимости можно добавить и другие типы
 
 # --- Таблица для Договоров ---
 
@@ -138,31 +134,24 @@ class Contract(SQLModel, table=True):
     """Договор на бурение скважины"""
     id: Optional[int] = Field(default=None, primary_key=True)
     contract_type: ContractTypeEnum = Field(default=ContractTypeEnum.DRILLING)
-
     contract_number: str = Field(index=True)
     contract_date: datetime = Field(default_factory=datetime.utcnow)
+    # see note above about avoiding cross-schema foreign key
+    user_id: Optional[PythonUUID] = Field(default=None)
 
-    # --- Клиент и объект ---
     client_name: str
-    location: str  # Адрес объекта
-
-    # --- Паспортные данные клиента (все необязательные) ---
+    location: str
     passport_series_number: Optional[str] = None
     passport_issued_by: Optional[str] = None
-    passport_issue_date: Optional[str] = None  # Храним как строку для простоты
+    passport_issue_date: Optional[str] = None
     passport_dep_code: Optional[str] = None
     passport_address: Optional[str] = None
-
-    # --- Параметры бурения ---
-    # Плановые
     estimated_depth: Optional[float] = None
     price_per_meter_soil: Optional[float] = None
     price_per_meter_rock: Optional[float] = None
-
-    # Фактические (заполняются после работ)
     actual_depth_soil: Optional[float] = None
     actual_depth_rock: Optional[float] = None
     pipe_steel_used: Optional[float] = None
     pipe_plastic_used: Optional[float] = None
-
     status: ContractStatusEnum = Field(default=ContractStatusEnum.PLANNED)
+    model_config = ConfigDict(arbitrary_types_allowed=True)

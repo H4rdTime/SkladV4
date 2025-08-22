@@ -7,7 +7,7 @@ import Cookies from 'js-cookie';
 import { KeyRound } from 'lucide-react';
 
 export default function LoginPage() {
-    const [username, setUsername] = useState('admin'); // Для удобства
+    const [username, setUsername] = useState(''); // Для удобства
     const [password, setPassword] = useState('');
     const [isLoading, setIsLoading] = useState(false);
     const router = useRouter();
