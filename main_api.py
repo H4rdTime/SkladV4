@@ -9,7 +9,7 @@ import hashlib
 import tempfile
 from datetime import date, datetime, timedelta, timezone
 from enum import Enum
-from typing import List, Optional, Annotated, Type
+from typing import List, Optional, Annotated, Type, Any
 
 # --- 2. Сторонние библиотеки ---
 import pandas as pd
@@ -710,37 +710,84 @@ async def import_1c_estimate(current_user: Annotated[dict, Depends(get_current_u
     except Exception as e:
         raise HTTPException(
             status_code=400, detail=f"Не удалось прочитать файл Excel. Ошибка: {e}")
-
+    # +++ ДИАГНОСТИЧЕСКИЙ БЛОК (ВСТАВЬТЕ ЕГО СЮДА) +++
+    print("\n--- ДИАГНОСТИКА EXCEL ФАЙЛА (1C) ---")
+    print("Содержимое первых 15 строк, как их видит Pandas:")
+    print(df.head(15).to_string())
+    print("--- КОНЕЦ ДИАГНОСТИКИ ---\n")
+    # +++ КОНЕЦ БЛОКА +++
     estimate_number, client_name, location = "б/н", "Не определен", "Не определен"
-    full_text = ' '.join(df.astype(str).to_string(
-        index=False, header=False).split())
+    # Build a cleaned text representation for extracting metadata.
+    # Remove repeated 'nan' tokens that come from empty Excel cells.
+    text_rows = []
+    for i, row in df.head(20).iterrows():
+        # join cells with a single space, filter out NaNs
+        cells = [str(x).strip() for x in row.values if pd.notna(x) and str(x).strip().lower() != 'nan']
+        if cells:
+            text_rows.append(' '.join(cells))
+    full_text = '\n'.join(text_rows)
 
-    if match := re.search(r'Коммерческое предложение №\s*(\S+)', full_text):
+    # Try to extract estimate number, client name and location from the cleaned rows
+    if match := re.search(r'Коммерческое предложение №\s*(\S+)', full_text, re.IGNORECASE):
         estimate_number = match.group(1)
-    if match := re.search(r'Кому:\s*[^,]+,\s*([^,\n]+)', full_text):
+    # Prefer explicit 'Кому:' lines
+    if match := re.search(r'Кому:\s*([^\n,]+)', full_text, re.IGNORECASE):
         client_name = match.group(1).strip()
-    elif match := re.search(r'Кому:\s*(.*)', full_text):
-        client_name = match.group(1).strip()
-    if match := re.search(r'Тема:\s*\w+_(.*)', full_text):
+    else:
+        # fallback: first non-empty line that looks like a person/name (contains Cyrillic letters)
+        for line in text_rows:
+            if re.search(r'[А-Яа-яЁё]', line):
+                client_name = line.strip()
+                break
+    if match := re.search(r'Тема:\s*[^\n_]+_(.*)', full_text, re.IGNORECASE):
         location = match.group(1).strip()
 
-    ALIASES = {'name': ['товары', 'товар', 'наименование'], 'quantity': [
-        'кол-во', 'количество'], 'unit_price': ['цена']}
+    # Flexible header matching: normalize both Excel cell text and alias tokens
+    def _normalize_header_text(s: Any) -> str:
+        if s is None:
+            return ""
+        s = str(s).strip().lower()
+        # keep letters, digits and spaces; remove punctuation like hyphens and non-breaking spaces
+        s = re.sub(r'[^а-яa-z0-9\s]', '', s)
+        s = re.sub(r'\s+', ' ', s)
+        return s
+
+    ALIASES = {
+        'name': ['товары', 'товар', 'наименование', 'наименование товара'],
+        'quantity': ['кол-во', 'количество', 'кол'],
+        'unit_price': ['цена', 'стоимость']
+    }
+
+    # Pre-normalize aliases so we compare like-with-like (handles hyphens etc.)
+    normalized_aliases = {k: [_normalize_header_text(a) for a in v] for k, v in ALIASES.items()}
+
     column_map, header_row_idx = {}, -1
     for idx, row in df.iterrows():
         for col_idx, cell_val in row.items():
-            cell_str = re.sub(r'[^а-яa-z\s]', '',
-                              str(cell_val).strip().lower())
-            for map_key, alias_list in ALIASES.items():
-                if map_key not in column_map and any(alias in cell_str for alias in alias_list):
-                    column_map[map_key] = col_idx
-                    break
+            cell_norm = _normalize_header_text(cell_val)
+            for map_key, alias_list in normalized_aliases.items():
+                if map_key in column_map:
+                    continue
+                for alias_norm in alias_list:
+                    if alias_norm and alias_norm in cell_norm:
+                        column_map[map_key] = col_idx
+                        break
         if len(column_map) == len(ALIASES):
             header_row_idx = idx
             break
     if header_row_idx == -1:
+        # Build a small preview of the first rows to help debug header mismatches
+        preview_rows = []
+        max_preview = 5
+        for i, row in df.head(max_preview).iterrows():
+            cells = [(_normalize_header_text(c)[:40] + ("..." if len(str(c)) > 40 else "")) for c in row.values]
+            preview_rows.append(f"Row {i}: " + " | ".join(cells))
+        preview_text = "\\n".join(preview_rows)
         raise HTTPException(
-            status_code=400, detail="Не найдены заголовки ('Товары', 'Кол-во', 'Цена').")
+            status_code=400,
+            detail=("Не найдены заголовки ('Товары', 'Кол-во', 'Цена'). "
+                    "Проверьте структуру файла. Превью первых строк:\n" + preview_text)
+        )
 
     all_products = session.exec(select(Product).where(
         Product.is_deleted == False)).all()
