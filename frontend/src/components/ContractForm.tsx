@@ -23,6 +23,7 @@ interface Contract {
     estimated_depth: number | null;
     price_per_meter_soil: number | null;
     price_per_meter_rock: number | null;
+    min_price?: number | null;
     actual_depth_soil: number | null;
     actual_depth_rock: number | null;
     pipe_steel_used: number | null;
@@ -71,9 +72,20 @@ export default function ContractForm({ contractId }: ContractFormProps) {
         fetchContract();
     }, [contractId]);
 
+    const numericFields = new Set([
+        'estimated_depth','price_per_meter_soil','price_per_meter_rock','min_price',
+        'actual_depth_soil','actual_depth_rock','pipe_steel_used','pipe_plastic_used'
+    ]);
+
     const handleChange = (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>) => {
         const { name, value } = e.target;
-        setFormData(prev => ({ ...prev, [name]: value === '' ? null : value }));
+        let v: any = value === '' ? null : value;
+        if (v !== null && numericFields.has(name)) {
+            // coerce to number if possible
+            const n = Number(v);
+            v = isNaN(n) ? null : n;
+        }
+        setFormData(prev => ({ ...prev, [name]: v }));
     };
 
     const handleSave = async () => {
@@ -299,6 +311,7 @@ export default function ContractForm({ contractId }: ContractFormProps) {
                                 <input type="number" step="0.01" name="price_per_meter_rock" value={formData.price_per_meter_rock ?? ''} onChange={handleChange} placeholder="Цена (по скале)" className="border p-2 rounded-md" />
                                 <div></div>
                                 <input type="date" name="contract_date" value={formData.contract_date ? new Date(formData.contract_date).toISOString().slice(0,10) : ''} onChange={handleChange} className="border p-2 rounded-md" />
+                                <input type="number" step="0.01" name="min_price" value={formData.min_price ?? ''} onChange={handleChange} placeholder="Минимальная сумма (₽)" className="border p-2 rounded-md" />
                                 <input type="number" step="0.1" name="actual_depth_soil" value={formData.actual_depth_soil ?? ''} onChange={handleChange} placeholder="Факт (до скалы), м" className="border p-2 rounded-md" />
                                 <input type="number" step="0.1" name="actual_depth_rock" value={formData.actual_depth_rock ?? ''} onChange={handleChange} placeholder="Факт (по скале), м" className="border p-2 rounded-md" />
                                 <input type="number" step="0.1" name="pipe_steel_used" value={formData.pipe_steel_used ?? ''} onChange={handleChange} placeholder="Исп. сталь, м" className="border p-2 rounded-md" />

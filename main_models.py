@@ -153,5 +153,7 @@ class Contract(SQLModel, table=True):
     actual_depth_rock: Optional[float] = None
     pipe_steel_used: Optional[float] = None
     pipe_plastic_used: Optional[float] = None
+    # Минимальная сумма для бурения (может быть переопределена на уровне договора)
+    min_price: Optional[float] = None
     status: ContractStatusEnum = Field(default=ContractStatusEnum.PLANNED)
     model_config = ConfigDict(arbitrary_types_allowed=True)

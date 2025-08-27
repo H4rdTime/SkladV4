@@ -79,6 +79,16 @@ def create_db_and_tables():
             except Exception as enum_exc:
                 # Если enum не существует или привязка иная — логируем и пропускаем
                 logger.debug(f"Не удалось проверить/обновить movementtypeenum: {enum_exc}")
+            # Runtime-миграция: добавить колонку min_price в таблицу contract, если её нет
+            try:
+                res_min = conn.execute(text("SELECT column_name FROM information_schema.columns WHERE table_name='contract' AND column_name='min_price'"))
+                if res_min.first() is None:
+                    logger.info("Колонка 'min_price' не найдена в таблице contract — добавляю...")
+                    # Используем тип DOUBLE PRECISION, допускающий NULL
+                    conn.execute(text("ALTER TABLE contract ADD COLUMN min_price DOUBLE PRECISION"))
+                    logger.info("Колонка 'min_price' успешно добавлена в таблицу contract.")
+            except Exception as min_exc:
+                logger.exception(f"Не удалось добавить колонку 'min_price' в таблицу contract: {min_exc}")
     except Exception as e:
         logger.exception(f"Не удалось выполнить миграцию shipped_at: {e}")
 
@@ -137,23 +147,7 @@ app = FastAPI(
 )
 
 
-# CORS: allow local frontend development origins and any configured NEXT_PUBLIC_API origins if needed
-origins = [
-    "http://localhost:3000",
-    "http://127.0.0.1:3000",
-]
-
-# also allow explicit host from environment if present
-if os.environ.get('NEXT_PUBLIC_API_URL'):
-    origins.append(os.environ.get('NEXT_PUBLIC_API_URL'))
-
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=origins,
-    allow_credentials=True,
-    allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
-    allow_headers=["*"],
-)
+# (CORS middleware is configured below using config.CORS_ORIGINS)
 
 # Форматируем ошибки валидации Pydantic в один удобочитаемый строковый message
 from fastapi.exceptions import RequestValidationError
@@ -1397,8 +1391,32 @@ def create_contract(current_user: Annotated[dict, Depends(get_current_user)], co
 
 
 @app.get("/contracts/", response_model=List[Contract], summary="Получить список договоров", tags=["Договоры"])
-def read_contracts(current_user: Annotated[dict, Depends(get_current_user)], session: Session = Depends(get_session)):
-    return session.exec(select(Contract).order_by(Contract.contract_date.desc())).all()
+def read_contracts(
+    current_user: Annotated[dict, Depends(get_current_user)],
+    session: Session = Depends(get_session),
+    search: Optional[str] = Query(None, description="Поиск по номеру договора или имени клиента"),
+    sort_by: Optional[str] = Query('contract_date', description="Поле сортировки: contract_number|contract_date"),
+    order: Optional[str] = Query('desc', description="Порядок сортировки: asc|desc")
+):
+    q = select(Contract)
+    if search:
+        term = f"%{search}%"
+        q = q.where(or_(Contract.contract_number.ilike(term), Contract.client_name.ilike(term)))
+
+    # Sorting
+    if sort_by == 'contract_number':
+        if order == 'asc':
+            q = q.order_by(Contract.contract_number.asc())
+        else:
+            q = q.order_by(Contract.contract_number.desc())
+    else:
+        # default: contract_date
+        if order == 'asc':
+            q = q.order_by(Contract.contract_date.asc())
+        else:
+            q = q.order_by(Contract.contract_date.desc())
+
+    return session.exec(q).all()
 
 
 @app.get("/contracts/{contract_id}", response_model=Contract, summary="Получить договор по ID", tags=["Договоры"])
@@ -1466,6 +1484,13 @@ def generate_contract_docx(
     except Exception:
         contract_date_obj = date.today()
 
+    # prepare min_price formatted
+    raw_min_price = getattr(contract, 'min_price', None) or float(config.MIN_WELL_COST)
+    try:
+        min_price_formatted = f"{int(round(float(raw_min_price))):,}".replace(',', ' ') + ' ₽'
+    except Exception:
+        min_price_formatted = str(raw_min_price)
+
     context = {
         'contract_number': contract.contract_number,
         'current_date_formatted': f"{contract_date_obj.day:02d} {['', 'января', 'февраля', 'марта', 'апреля', 'мая', 'июня', 'июля', 'августа', 'сентября', 'октября', 'ноября', 'декабря'][contract_date_obj.month]} {contract_date_obj.year} г.",
@@ -1484,6 +1509,7 @@ def generate_contract_docx(
         'pipe_steel_used': contract.pipe_steel_used or 0,
     'pipe_plastic_used': contract.pipe_plastic_used or 0,
     'contract_date': getattr(contract, 'contract_date', None),
+    'min_price': getattr(contract, 'min_price', None) or config.MIN_WELL_COST,
     }
 
     with tempfile.NamedTemporaryFile(delete=False, suffix=".docx") as tmp:
@@ -1549,10 +1575,14 @@ def calculate_contract_revenue(current_user: Annotated[dict, Depends(get_current
 
     subtotal = drilling_only + pipe_cost_retail
 
-    applied_min = float(req.min_price) if req.min_price is not None else None
-    # min price applies to drilling part only (as per business rule) — if min is greater, use it instead of drilling_only
-    if applied_min is not None and applied_min > drilling_only:
+    # Determine applied minimum: preference to request, otherwise use configured MIN_WELL_COST
+    applied_min = float(req.min_price) if req.min_price is not None else float(config.MIN_WELL_COST)
+    min_applied_flag = False
+    # min price applies to drilling part only — if min is greater, use it instead of drilling_only
+    if applied_min > drilling_only:
+        # use the configured/requested minimum for drilling part
         total = applied_min + pipe_cost_retail
+        min_applied_flag = True
     else:
         total = subtotal
 
@@ -1593,6 +1623,17 @@ def calculate_contract_revenue(current_user: Annotated[dict, Depends(get_current
         sum=round(plastic_retail_price * plastic_pipe_m, 2) if plastic_pipe_m else None,
         purchase_sum=round(plastic_purchase_price * plastic_pipe_m, 2) if plastic_pipe_m else None
     ))
+
+    # If minimal drilling price was applied, add a line to show adjusted drilling cost
+    if min_applied_flag:
+        items.append(RevenueDetailItem(
+            name="Минимальная стоимость бурения (применена минимальная сумма)",
+            price=round(applied_min, 2),
+            quantity=1,
+            unit="шт.",
+            sum=round(applied_min, 2),
+            purchase_sum=None
+        ))
 
     # subtotal and net profit
     net_profit = round((subtotal - pipe_cost_purchase), 2)
