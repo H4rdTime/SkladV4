@@ -1,7 +1,7 @@
 // frontend/src/lib/api.ts
 import Cookies from 'js-cookie';
 
-const API_URL = process.env.NEXT_PUBLIC_API_URL || 'https://sklad-petrovich-api.onrender.com';
+export const API_URL = process.env.NEXT_PUBLIC_API_URL || 'https://sklad-petrovich-api.onrender.com';
 
 export const fetchApi = async (url: string, options: RequestInit = {}) => {
     const token = Cookies.get('accessToken');
@@ -17,7 +17,7 @@ export const fetchApi = async (url: string, options: RequestInit = {}) => {
     try {
         const response = await fetch(`${API_URL}${url}`, { ...options, headers });
 
-        if (!response.ok) {
+    if (!response.ok) {
             // --- УМНАЯ ОБРАБОТКА ОШИБКИ 401 ---
             if (response.status === 401) {
                 // Если мы не авторизованы, удаляем "протухший" cookie
@@ -31,8 +31,29 @@ export const fetchApi = async (url: string, options: RequestInit = {}) => {
             }
             // --- КОНЕЦ УМНОЙ ОБРАБОТКИ ---
             
-            const errorData = await response.json();
-            throw new Error(errorData.detail || `Ошибка ${response.status}`);
+            // Try parsing JSON, but be resilient: Pydantic may return an array of errors
+            let errorData: any = null;
+            try {
+                errorData = await response.json();
+            } catch (e) {
+                // not JSON
+            }
+
+            let errorMessage = `Ошибка ${response.status}`;
+            if (errorData) {
+                if (Array.isArray(errorData)) {
+                    errorMessage = errorData.map((item: any) => {
+                        if (typeof item === 'string') return item;
+                        if (item && typeof item === 'object') return item.detail || item.msg || item.message || JSON.stringify(item);
+                        return String(item);
+                    }).join('; ');
+                } else if (typeof errorData === 'object') {
+                    errorMessage = errorData.detail || errorData.message || JSON.stringify(errorData);
+                } else {
+                    errorMessage = String(errorData);
+                }
+            }
+            throw new Error(errorMessage);
         }
         
         if (response.status === 204) return null;

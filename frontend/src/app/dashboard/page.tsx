@@ -84,6 +84,13 @@ export default function DashboardPage() {
                     link="/reports"
                     color="#10b981" // emerald-500
                 />
+                    <StatCard
+                        title="Прибыль по бурению (30д)"
+                        value={`${(data?.profit_last_30_days || 0).toFixed(0)} ₽`}
+                        icon={DollarSign}
+                        link="/reports/drilling"
+                        color="#06b6d4" // teal-500
+                    />
             </div>
         </main>
     );

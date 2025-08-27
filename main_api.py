@@ -136,6 +136,41 @@ app = FastAPI(
     description="API для управления складской системой."
 )
 
+
+# CORS: allow local frontend development origins and any configured NEXT_PUBLIC_API origins if needed
+origins = [
+    "http://localhost:3000",
+    "http://127.0.0.1:3000",
+]
+
+# also allow explicit host from environment if present
+if os.environ.get('NEXT_PUBLIC_API_URL'):
+    origins.append(os.environ.get('NEXT_PUBLIC_API_URL'))
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=origins,
+    allow_credentials=True,
+    allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+    allow_headers=["*"],
+)
+
+# Форматируем ошибки валидации Pydantic в один удобочитаемый строковый message
+from fastapi.exceptions import RequestValidationError
+from fastapi.responses import JSONResponse
+
+
+@app.exception_handler(RequestValidationError)
+async def validation_exception_handler(request, exc: RequestValidationError):
+    # exc.errors() содержит список ошибок от Pydantic
+    parts = []
+    for err in exc.errors():
+        loc = '.'.join(str(x) for x in err.get('loc', []))
+        msg = err.get('msg', '')
+        parts.append(f"{loc}: {msg}")
+    detail = '; '.join(parts) if parts else str(exc)
+    return JSONResponse(status_code=422, content={"detail": detail})
+
 # --- НАСТРОЙКА CORS ---
 app.add_middleware(
     CORSMiddleware,
@@ -301,6 +336,55 @@ class ContractUpdate(BaseModel):
     pipe_plastic_used: Optional[float] = None
     status: Optional[ContractStatusEnum] = None
     contract_type: Optional[ContractTypeEnum] = None
+
+
+class RevenueCalcRequest(BaseModel):
+    meters_soil: float
+    meters_rock: float
+    steel_pipe_meters: Optional[float] = None
+    steel_pipe_price_per_meter: Optional[float] = None
+    plastic_pipe_meters: Optional[float] = None
+    plastic_pipe_price_per_meter: Optional[float] = None
+    min_price: Optional[float] = None
+    # optional lookup keys — если не переданы, используются константы по умолчанию
+    steel_internal_sku: Optional[str] = None
+    plastic_internal_sku: Optional[str] = None
+
+
+class RevenueCalcResponse(BaseModel):
+    contract_id: int
+    price_per_meter_soil: Optional[float]
+    price_per_meter_rock: Optional[float]
+    meters_soil: float
+    meters_rock: float
+    drilling_only: float
+    # pipe costs broken down by purchase (закуп) and retail (розница)
+    pipe_cost_purchase: float
+    pipe_cost_retail: float
+    subtotal: float
+    applied_min_price: Optional[float]
+    total: float
+
+
+class RevenueDetailItem(BaseModel):
+    name: str
+    price: Optional[float] = None
+    quantity: Optional[float] = None
+    unit: str = "шт."
+    sum: Optional[float] = None
+    purchase_sum: Optional[float] = None
+
+
+class RevenueDetailResponse(BaseModel):
+    contract_id: int
+    items: List[RevenueDetailItem]
+    drilling_only: float
+    pipe_cost_purchase: float
+    pipe_cost_retail: float
+    subtotal: float
+    applied_min_price: Optional[float]
+    total: float
+    net_profit: float  # total retail - purchase (pipes)
 
 
 class ProductUpdate(BaseModel):
@@ -1346,6 +1430,184 @@ def write_off_pipes(current_user: Annotated[dict, Depends(get_current_user)], co
     session.commit()
     session.refresh(db_contract)
     return db_contract
+
+
+@app.get("/contracts/{contract_id}/generate-docx", summary="Сгенерировать договор .docx", tags=["Договоры"])
+def generate_contract_docx(
+    current_user: Annotated[dict, Depends(get_current_user)], contract_id: int,
+    background_tasks: BackgroundTasks, session: Session = Depends(get_session)
+):
+    """Генерирует .docx для договора по шаблону в папке templates.
+    Если шаблон отсутствует, возвращает 500 с объяснением.
+    """
+    contract = get_db_object_or_404(Contract, contract_id, session)
+
+    # Выбираем шаблон по типу договора, если есть специализированный шаблон для насосов
+    tmpl_name = "contract_template.docx"
+    # if contract_type mentions pumps (насос), prefer pumps template
+    if 'насос' in getattr(contract, 'contract_type', '').lower():
+        alt = os.path.join('templates', 'contract_template_pumps.docx')
+        if os.path.exists(alt):
+            tmpl_name = 'contract_template_pumps.docx'
+
+    template_path = os.path.join('templates', tmpl_name)
+    if not os.path.exists(template_path):
+        raise HTTPException(status_code=500, detail="Шаблон договора не найден")
+
+    # Подготавливаем контекст для шаблона. Оставляем наиболее востребованные поля.
+    # prefer contract.contract_date if present so historical contracts show their original date in documents
+    try:
+        contract_dt = contract.contract_date
+        if hasattr(contract_dt, 'date'):
+            contract_date_obj = contract_dt.date()
+        else:
+            # fallback: try parse iso string
+            contract_date_obj = datetime.fromisoformat(str(contract_dt)).date()
+    except Exception:
+        contract_date_obj = date.today()
+
+    context = {
+        'contract_number': contract.contract_number,
+        'current_date_formatted': f"{contract_date_obj.day:02d} {['', 'января', 'февраля', 'марта', 'апреля', 'мая', 'июня', 'июля', 'августа', 'сентября', 'октября', 'ноября', 'декабря'][contract_date_obj.month]} {contract_date_obj.year} г.",
+        'contract_date_iso': contract_date_obj.isoformat(),
+        'client_name': contract.client_name,
+        'location': contract.location or '',
+        'passport_series_number': contract.passport_series_number or '',
+        'passport_issued_by': contract.passport_issued_by or '',
+        'passport_issue_date': contract.passport_issue_date or '',
+        'passport_dep_code': contract.passport_dep_code or '',
+        'estimated_depth': contract.estimated_depth or '',
+        'price_per_meter_soil': contract.price_per_meter_soil or 0,
+        'price_per_meter_rock': contract.price_per_meter_rock or 0,
+        'actual_depth_soil': contract.actual_depth_soil or 0,
+        'actual_depth_rock': contract.actual_depth_rock or 0,
+        'pipe_steel_used': contract.pipe_steel_used or 0,
+    'pipe_plastic_used': contract.pipe_plastic_used or 0,
+    'contract_date': getattr(contract, 'contract_date', None),
+    }
+
+    with tempfile.NamedTemporaryFile(delete=False, suffix=".docx") as tmp:
+        doc = DocxTemplate(template_path)
+        doc.render(context)
+        doc.save(tmp.name)
+        tmp_path = tmp.name
+
+    background_tasks.add_task(os.remove, tmp_path)
+    filename = f"Contract_{contract.contract_number.replace(' ', '_')}.docx"
+    return FileResponse(path=tmp_path, filename=filename, media_type='application/vnd.openxmlformats-officedocument.wordprocessingml.document')
+
+
+@app.post('/contracts/{contract_id}/calculate-revenue', response_model=RevenueDetailResponse, summary='Посчитать выручку по договору (детально)', tags=['Договоры'])
+def calculate_contract_revenue(current_user: Annotated[dict, Depends(get_current_user)], contract_id: int, req: RevenueCalcRequest, session: Session = Depends(get_session)):
+    contract = get_db_object_or_404(Contract, contract_id, session)
+
+    price_soil = contract.price_per_meter_soil
+    price_rock = contract.price_per_meter_rock
+
+    if price_soil is None or price_rock is None:
+        raise HTTPException(status_code=400, detail='В договоре не заданы цены за метр (до скалы/по скале).')
+
+    meters_soil = float(req.meters_soil or 0.0)
+    meters_rock = float(req.meters_rock or 0.0)
+
+    # meters used (take from request first, then contract values)
+    steel_pipe_m = float(req.steel_pipe_meters) if req.steel_pipe_meters is not None else (float(contract.pipe_steel_used) if contract.pipe_steel_used is not None else 0.0)
+    plastic_pipe_m = float(req.plastic_pipe_meters) if req.plastic_pipe_meters is not None else (float(contract.pipe_plastic_used) if contract.pipe_plastic_used is not None else 0.0)
+
+    # Attempt to read pipe prices from products in warehouse. If request explicitly provides per-meter prices, use them;
+    # otherwise try to lookup products by internal_sku (from request or defaults) and take their purchase/retail prices.
+    DEFAULT_STEEL_SKU = 'PIPE_STEEL_133_ST20'
+    DEFAULT_PLASTIC_SKU = 'PIPE_PLASTIC_110_6_1'
+
+    steel_sku = req.steel_internal_sku or DEFAULT_STEEL_SKU
+    plastic_sku = req.plastic_internal_sku or DEFAULT_PLASTIC_SKU
+
+    # lookup products
+    steel_product = session.exec(select(Product).where(Product.internal_sku == steel_sku)).first()
+    plastic_product = session.exec(select(Product).where(Product.internal_sku == plastic_sku)).first()
+
+    # prices per meter (purchase and retail)
+    steel_purchase_price = float(steel_product.purchase_price) if steel_product and steel_product.purchase_price is not None else 0.0
+    steel_retail_price = float(steel_product.retail_price) if steel_product and steel_product.retail_price is not None else 0.0
+
+    plastic_purchase_price = float(plastic_product.purchase_price) if plastic_product and plastic_product.purchase_price is not None else 0.0
+    plastic_retail_price = float(plastic_product.retail_price) if plastic_product and plastic_product.retail_price is not None else 0.0
+
+    # If caller provided explicit per-meter prices, prefer them (applied as retail/purchase both equal to provided price)
+    if req.steel_pipe_price_per_meter is not None:
+        steel_retail_price = steel_purchase_price = float(req.steel_pipe_price_per_meter)
+    if req.plastic_pipe_price_per_meter is not None:
+        plastic_retail_price = plastic_purchase_price = float(req.plastic_pipe_price_per_meter)
+
+    drilling_soil_cost = price_soil * meters_soil
+    drilling_rock_cost = price_rock * meters_rock
+    drilling_only = drilling_soil_cost + drilling_rock_cost
+
+    # pipe costs: purchase (закуп) and retail (розница)
+    pipe_cost_purchase = steel_purchase_price * steel_pipe_m + plastic_purchase_price * plastic_pipe_m
+    pipe_cost_retail = steel_retail_price * steel_pipe_m + plastic_retail_price * plastic_pipe_m
+
+    subtotal = drilling_only + pipe_cost_retail
+
+    applied_min = float(req.min_price) if req.min_price is not None else None
+    # min price applies to drilling part only (as per business rule) — if min is greater, use it instead of drilling_only
+    if applied_min is not None and applied_min > drilling_only:
+        total = applied_min + pipe_cost_retail
+    else:
+        total = subtotal
+
+    # Build detailed line items
+    items: List[RevenueDetailItem] = []
+    # drilling lines
+    items.append(RevenueDetailItem(
+        name="Работы по бурению до скальных пород",
+        price=price_soil,
+        quantity=meters_soil,
+        unit="метр",
+        sum=round(drilling_soil_cost, 2),
+        purchase_sum=None
+    ))
+    items.append(RevenueDetailItem(
+        name="Работы по бурению по скальным породам",
+        price=price_rock,
+        quantity=meters_rock,
+        unit="метр",
+        sum=round(drilling_rock_cost, 2),
+        purchase_sum=None
+    ))
+
+    # pipe lines
+    items.append(RevenueDetailItem(
+        name=f"Стальная обсадная труба {steel_sku}",
+        price=steel_retail_price,
+        quantity=steel_pipe_m,
+        unit="метр",
+        sum=round(steel_retail_price * steel_pipe_m, 2) if steel_pipe_m else None,
+        purchase_sum=round(steel_purchase_price * steel_pipe_m, 2) if steel_pipe_m else None
+    ))
+    items.append(RevenueDetailItem(
+        name=f"Пластиковая труба {plastic_sku}",
+        price=plastic_retail_price,
+        quantity=plastic_pipe_m,
+        unit="метр",
+        sum=round(plastic_retail_price * plastic_pipe_m, 2) if plastic_pipe_m else None,
+        purchase_sum=round(plastic_purchase_price * plastic_pipe_m, 2) if plastic_pipe_m else None
+    ))
+
+    # subtotal and net profit
+    net_profit = round((subtotal - pipe_cost_purchase), 2)
+
+    return RevenueDetailResponse(
+        contract_id=contract_id,
+        items=items,
+        drilling_only=round(drilling_only, 2),
+        pipe_cost_purchase=round(pipe_cost_purchase, 2),
+        pipe_cost_retail=round(pipe_cost_retail, 2),
+        subtotal=round(subtotal, 2),
+        applied_min_price=applied_min,
+        total=round(total, 2),
+        net_profit=net_profit
+    )
 # --- Эндпоинты для Отчетов (Reports) ---
 
 
@@ -1414,6 +1676,69 @@ def get_profit_report(
         items=report_items, grand_total_retail=grand_total_retail, grand_total_purchase=grand_total_purchase,
         grand_total_profit=grand_total_profit, average_margin=average_margin
     )
+
+
+class DrillingProfitItem(BaseModel):
+    contract_id: int
+    contract_number: str
+    client_name: str
+    completed_at: date
+    drilling_retail: float
+    drilling_purchase: float
+    pipe_purchase: float
+    pipe_retail: float
+    profit: float
+
+
+class DrillingProfitResponse(BaseModel):
+    items: List[DrillingProfitItem]
+    grand_total_profit: float
+
+
+@app.get("/reports/drilling-profit", response_model=DrillingProfitResponse, summary="Прибыль по бурению (период)", tags=["Отчеты"])
+def get_drilling_profit_report(
+    current_user: Annotated[dict, Depends(get_current_user)],
+    start_date: Optional[date] = None,
+    end_date: Optional[date] = None,
+    session: Session = Depends(get_session)
+):
+    query = select(Contract).where(Contract.contract_type == ContractTypeEnum.DRILLING, Contract.status == ContractStatusEnum.COMPLETED)
+    if start_date and end_date:
+        query = query.where(Contract.contract_date >= start_date, Contract.contract_date < (end_date + timedelta(days=1)))
+    contracts = session.exec(query).all()
+
+    items: List[DrillingProfitItem] = []
+    grand_profit = 0.0
+    for c in contracts:
+        # compute drilling revenue using existing calculation logic: call calculate_contract_revenue internally
+        # We replicate small part of logic here for simplicity
+        price_soil = c.price_per_meter_soil or 0.0
+        price_rock = c.price_per_meter_rock or 0.0
+        meters_soil = float(c.actual_depth_soil or 0.0)
+        meters_rock = float(c.actual_depth_rock or 0.0)
+        drilling_retail = price_soil * meters_soil + price_rock * meters_rock
+
+        # pipe costs
+        steel_m = float(c.pipe_steel_used or 0.0)
+        plastic_m = float(c.pipe_plastic_used or 0.0)
+        steel_prod = session.exec(select(Product).where(Product.internal_sku == 'PIPE_STEEL_133_ST20')).first()
+        plastic_prod = session.exec(select(Product).where(Product.internal_sku == 'PIPE_PLASTIC_110_6_1')).first()
+        steel_purchase = float(steel_prod.purchase_price) if steel_prod and steel_prod.purchase_price is not None else 0.0
+        steel_retail = float(steel_prod.retail_price) if steel_prod and steel_prod.retail_price is not None else 0.0
+        plastic_purchase = float(plastic_prod.purchase_price) if plastic_prod and plastic_prod.purchase_price is not None else 0.0
+        plastic_retail = float(plastic_prod.retail_price) if plastic_prod and plastic_prod.retail_price is not None else 0.0
+        pipe_purchase = steel_purchase * steel_m + plastic_purchase * plastic_m
+        pipe_retail = steel_retail * steel_m + plastic_retail * plastic_m
+
+        profit = (drilling_retail + pipe_retail) - (pipe_purchase)
+        grand_profit += profit
+        items.append(DrillingProfitItem(
+            contract_id=c.id, contract_number=c.contract_number, client_name=c.client_name,
+            completed_at=c.contract_date.date(), drilling_retail=round(drilling_retail,2), drilling_purchase=0.0,
+            pipe_purchase=round(pipe_purchase,2), pipe_retail=round(pipe_retail,2), profit=round(profit,2)
+        ))
+
+    return DrillingProfitResponse(items=items, grand_total_profit=round(grand_profit,2))
 
 
 @app.get("/dashboard/summary", response_model=DashboardSummary, summary="Сводка для дашборда", tags=["Дашборд"])

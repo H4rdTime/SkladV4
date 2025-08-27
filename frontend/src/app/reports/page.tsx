@@ -215,6 +215,9 @@ export default function ReportsPage() {
                     )}
                     {!profitReport && !isLoadingProfit && <p className="p-4 text-center text-gray-500">Выберите фильтр и нажмите "Сформировать".</p>}
                 </div>
+                                    <div className="p-4 bg-white rounded-md">
+                                        <a className="text-blue-600 hover:underline" href="/reports/drilling">Отчет по прибыли: бурение (период)</a>
+                                    </div>
             </div>
         </main>
     );

@@ -252,9 +252,11 @@ export default function WarehousePage() {
     if (!issueProduct || !issueWorkerId || issueQuantity <= 0) { toast.error("Проверьте данные"); return; }
     const toastId = toast.loading('Выдача товара...');
     try {
+      const payload = { product_id: issueProduct.id, worker_id: Number(issueWorkerId), quantity: Number(issueQuantity) };
+      console.log('Issuing payload:', payload);
       const movement = await fetchApi('/actions/issue-item/', {
         method: 'POST',
-        body: JSON.stringify({ /* ... */ })
+        body: JSON.stringify(payload)
       });
 
       toast.success(t => (
