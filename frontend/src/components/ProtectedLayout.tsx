@@ -1,15 +1,15 @@
-// frontend/src/components/ProtectedLayout.tsx
+// src/components/ProtectedLayout.tsx
 'use client';
 import Link from 'next/link';
 import toast from 'react-hot-toast';
-import { Warehouse, Users, FileText, BookUser, Trash2, History, ClipboardList, LayoutDashboard, X, Menu } from 'lucide-react';
+import { Warehouse, Users, FileText, BookUser, Trash2, History, ClipboardList, LayoutDashboard, X, Menu, LineChart, Hammer } from 'lucide-react'; // Добавил иконки
 import { useState } from 'react';
 
 const NavLink = ({ href, children, onClose }: { href: string, children: React.ReactNode, onClose: () => void }) => {
     return (
         <Link
             href={href}
-            onClick={onClose} // <-- ВОТ МАГИЯ: при клике вызываем функцию закрытия
+            onClick={onClose}
             className="flex items-center gap-3 px-3 py-2 text-gray-700 rounded-md hover:bg-gray-100 transition-colors"
         >
             {children}
@@ -44,14 +44,11 @@ export default function ProtectedLayout({ children }: { children: React.ReactNod
 
     return (
         <div className="flex h-screen bg-gray-100">
-            {/* --- Боковое меню (Сайдбар) --- */}
-            {/* Оно теперь будет прятаться на экранах меньше `lg` (large) */}
             <aside className={`w-64 bg-white shadow-md flex-col flex-shrink-0 lg:flex ${isMobileMenuOpen ? 'flex' : 'hidden'} absolute lg:relative z-20 h-full`}>
                 <div className="p-4 border-b">
                     <h1 className="text-2xl font-bold text-blue-600">Склад v4</h1>
                 </div>
                 <nav className="flex-grow p-4 space-y-2">
-                    {/* --- ИЗМЕНЕНИЕ: Заменяем все <Link> на <NavLink> --- */}
                     <NavLink href="/dashboard" onClose={() => setIsMobileMenuOpen(false)}>
                         <LayoutDashboard size={20} />
                         <span>Дашборд</span>
@@ -80,10 +77,22 @@ export default function ProtectedLayout({ children }: { children: React.ReactNod
                         <Users size={20} />
                         <span>На руках</span>
                     </NavLink>
-                    <NavLink href="/reports" onClose={() => setIsMobileMenuOpen(false)}>
-                        <ClipboardList size={20} />
-                        <span>Отчеты</span>
+                    
+                    {/* --- ИЗМЕНЕНИЯ ЗДЕСЬ --- */}
+                    {/* Разделитель для секции отчетов */}
+                    <div className="pt-2">
+                        <span className="px-3 text-xs font-semibold uppercase text-gray-500">Отчеты</span>
+                    </div>
+
+                    <NavLink href="/reports/profit" onClose={() => setIsMobileMenuOpen(false)}>
+                        <LineChart size={20} />
+                        <span>Прибыль по сметам</span>
                     </NavLink>
+                    <NavLink href="/reports/drilling" onClose={() => setIsMobileMenuOpen(false)}>
+                        <Hammer size={20} />
+                        <span>Прибыль по бурению</span>
+                    </NavLink>
+
                 </nav>
                 <div className="p-4 border-t">
                     <button onClick={handleClearData} className="w-full flex items-center justify-center gap-2 px-3 py-2 text-red-600 bg-red-50 rounded-md hover:bg-red-100 hover:text-red-800 transition-colors">
@@ -93,9 +102,7 @@ export default function ProtectedLayout({ children }: { children: React.ReactNod
                 </div>
             </aside>
 
-            {/* --- Основной контент --- */}
             <div className="flex-1 flex flex-col overflow-hidden">
-                {/* --- НОВАЯ ВЕРХНЯЯ ПАНЕЛЬ (Header) --- */}
                 <header className="lg:hidden bg-white shadow-md p-4 flex justify-between items-center">
                     <h1 className="text-xl font-bold text-blue-600">Склад v4</h1>
                     <button onClick={() => setIsMobileMenuOpen(!isMobileMenuOpen)}>
@@ -103,7 +110,6 @@ export default function ProtectedLayout({ children }: { children: React.ReactNod
                     </button>
                 </header>
 
-                {/* Контент страницы теперь имеет свой скролл */}
                 <div className="flex-1 overflow-y-auto">
                     {children}
                 </div>

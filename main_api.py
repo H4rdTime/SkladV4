@@ -1,6 +1,8 @@
 # main_api.py
 
 # --- 1. Стандартная библиотека ---
+from fastapi.responses import JSONResponse
+from fastapi.exceptions import RequestValidationError
 import io
 import os
 import re
@@ -64,31 +66,44 @@ def create_db_and_tables():
     # таблица уже существует без этой колонки, автоматически добавим колонку.
     try:
         with engine.begin() as conn:
-            res = conn.execute(text("SELECT column_name FROM information_schema.columns WHERE table_name='estimate' AND column_name='shipped_at'"))
+            res = conn.execute(text(
+                "SELECT column_name FROM information_schema.columns WHERE table_name='estimate' AND column_name='shipped_at'"))
             if res.first() is None:
-                logger.info("Колонка 'shipped_at' не найдена в таблице estimate — добавляю...")
-                conn.execute(text("ALTER TABLE estimate ADD COLUMN shipped_at TIMESTAMP WITH TIME ZONE"))
+                logger.info(
+                    "Колонка 'shipped_at' не найдена в таблице estimate — добавляю...")
+                conn.execute(
+                    text("ALTER TABLE estimate ADD COLUMN shipped_at TIMESTAMP WITH TIME ZONE"))
                 logger.info("Колонка 'shipped_at' успешно добавлена.")
             # Runtime-миграция: убедимся, что enum movementtypeenum содержит необходимые значения
             try:
-                enum_vals = conn.execute(text("SELECT enum_range(NULL::movementtypeenum)")).scalar()
+                enum_vals = conn.execute(
+                    text("SELECT enum_range(NULL::movementtypeenum)")).scalar()
                 if enum_vals and 'WRITE_OFF_WORKER' not in enum_vals:
-                    logger.info("Значение 'WRITE_OFF_WORKER' не найдено в movementtypeenum — добавляю...")
-                    conn.execute(text("ALTER TYPE movementtypeenum ADD VALUE 'WRITE_OFF_WORKER'"))
-                    logger.info("Значение 'WRITE_OFF_WORKER' успешно добавлено в movementtypeenum.")
+                    logger.info(
+                        "Значение 'WRITE_OFF_WORKER' не найдено в movementtypeenum — добавляю...")
+                    conn.execute(
+                        text("ALTER TYPE movementtypeenum ADD VALUE 'WRITE_OFF_WORKER'"))
+                    logger.info(
+                        "Значение 'WRITE_OFF_WORKER' успешно добавлено в movementtypeenum.")
             except Exception as enum_exc:
                 # Если enum не существует или привязка иная — логируем и пропускаем
-                logger.debug(f"Не удалось проверить/обновить movementtypeenum: {enum_exc}")
+                logger.debug(
+                    f"Не удалось проверить/обновить movementtypeenum: {enum_exc}")
             # Runtime-миграция: добавить колонку min_price в таблицу contract, если её нет
             try:
-                res_min = conn.execute(text("SELECT column_name FROM information_schema.columns WHERE table_name='contract' AND column_name='min_price'"))
+                res_min = conn.execute(text(
+                    "SELECT column_name FROM information_schema.columns WHERE table_name='contract' AND column_name='min_price'"))
                 if res_min.first() is None:
-                    logger.info("Колонка 'min_price' не найдена в таблице contract — добавляю...")
+                    logger.info(
+                        "Колонка 'min_price' не найдена в таблице contract — добавляю...")
                     # Используем тип DOUBLE PRECISION, допускающий NULL
-                    conn.execute(text("ALTER TABLE contract ADD COLUMN min_price DOUBLE PRECISION"))
-                    logger.info("Колонка 'min_price' успешно добавлена в таблицу contract.")
+                    conn.execute(
+                        text("ALTER TABLE contract ADD COLUMN min_price DOUBLE PRECISION"))
+                    logger.info(
+                        "Колонка 'min_price' успешно добавлена в таблицу contract.")
             except Exception as min_exc:
-                logger.exception(f"Не удалось добавить колонку 'min_price' в таблицу contract: {min_exc}")
+                logger.exception(
+                    f"Не удалось добавить колонку 'min_price' в таблицу contract: {min_exc}")
     except Exception as e:
         logger.exception(f"Не удалось выполнить миграцию shipped_at: {e}")
 
@@ -123,7 +138,8 @@ async def get_current_user(token: Annotated[str, Depends(oauth2_scheme)]):
 
     # Попытка 1: это наш собственный JWT, подписанный SECRET_KEY
     try:
-        payload = jwt.decode(token, config.SECRET_KEY, algorithms=[config.ALGORITHM])
+        payload = jwt.decode(token, config.SECRET_KEY,
+                             algorithms=[config.ALGORITHM])
         return payload
     except JWTError:
         # Если не наш токен — пробуем декодировать как Supabase JWT (backwards compatibility)
@@ -150,8 +166,6 @@ app = FastAPI(
 # (CORS middleware is configured below using config.CORS_ORIGINS)
 
 # Форматируем ошибки валидации Pydantic в один удобочитаемый строковый message
-from fastapi.exceptions import RequestValidationError
-from fastapi.responses import JSONResponse
 
 
 @app.exception_handler(RequestValidationError)
@@ -487,7 +501,8 @@ def read_products(
     if stock_status == StockStatusFilter.LOW_STOCK:
         # Only consider products that have a configured minimum stock (> 0).
         # Show products where current stock is less or equal to the configured minimum.
-        query = query.where((Product.min_stock_level > 0) & (Product.stock_quantity <= Product.min_stock_level))
+        query = query.where((Product.min_stock_level > 0) & (
+            Product.stock_quantity <= Product.min_stock_level))
     elif stock_status == StockStatusFilter.OUT_OF_STOCK:
         query = query.where(Product.stock_quantity <= 0)
 
@@ -663,7 +678,8 @@ def write_off_item_from_worker(current_user: Annotated[dict, Depends(get_current
     worker = get_db_object_or_404(Worker, request.worker_id, session)
 
     if request.quantity <= 0:
-        raise HTTPException(status_code=400, detail="Количество для списания должно быть больше нуля.")
+        raise HTTPException(
+            status_code=400, detail="Количество для списания должно быть больше нуля.")
 
     # Рассчитываем текущий баланс на руках у работника
     current_on_hand_sum = session.exec(select(func.coalesce(func.sum(StockMovement.quantity), 0)).where(
@@ -690,7 +706,8 @@ def write_off_item_from_worker(current_user: Annotated[dict, Depends(get_current
     )
 
     # Добавляем лог для отладки, чтобы видеть, что именно сохраняется в БД
-    logger.info(f"ЗАПИСЬ ДВИЖЕНИЯ СПИСАНИЯ: Работник ID={movement.worker_id}, Товар ID={movement.product_id}, Количество={movement.quantity}")
+    logger.info(
+        f"ЗАПИСЬ ДВИЖЕНИЯ СПИСАНИЯ: Работник ID={movement.worker_id}, Товар ID={movement.product_id}, Количество={movement.quantity}")
 
     session.add(movement)
     session.commit()
@@ -800,7 +817,8 @@ async def import_1c_estimate(current_user: Annotated[dict, Depends(get_current_u
     text_rows = []
     for i, row in df.head(20).iterrows():
         # join cells with a single space, filter out NaNs
-        cells = [str(x).strip() for x in row.values if pd.notna(x) and str(x).strip().lower() != 'nan']
+        cells = [str(x).strip() for x in row.values if pd.notna(x)
+                 and str(x).strip().lower() != 'nan']
         if cells:
             text_rows.append(' '.join(cells))
     full_text = '\n'.join(text_rows)
@@ -837,7 +855,8 @@ async def import_1c_estimate(current_user: Annotated[dict, Depends(get_current_u
     }
 
     # Pre-normalize aliases so we compare like-with-like (handles hyphens etc.)
-    normalized_aliases = {k: [_normalize_header_text(a) for a in v] for k, v in ALIASES.items()}
+    normalized_aliases = {k: [_normalize_header_text(
+        a) for a in v] for k, v in ALIASES.items()}
 
     column_map, header_row_idx = {}, -1
     for idx, row in df.iterrows():
@@ -858,7 +877,8 @@ async def import_1c_estimate(current_user: Annotated[dict, Depends(get_current_u
         preview_rows = []
         max_preview = 5
         for i, row in df.head(max_preview).iterrows():
-            cells = [(_normalize_header_text(c)[:40] + ("..." if len(str(c)) > 40 else "")) for c in row.values]
+            cells = [(_normalize_header_text(c)[:40] +
+                      ("..." if len(str(c)) > 40 else "")) for c in row.values]
             preview_rows.append(f"Row {i}: " + " | ".join(cells))
         preview_text = "\\n".join(preview_rows)
         raise HTTPException(
@@ -1183,7 +1203,6 @@ def ship_estimate(current_user: Annotated[dict, Depends(get_current_user)], esti
     return {"message": f"Смета №{estimate.estimate_number} успешно отгружена на работника {worker.name}."}
 
 
-
 @app.post("/estimates/{estimate_id}/complete", summary="Завершить смету и окончательно списать товары", tags=["Сметы"])
 def complete_estimate(current_user: Annotated[dict, Depends(get_current_user)], estimate_id: int, session: Session = Depends(get_session)):
     """Окончательное завершение сметы: создаёт движения списания по смете и переводит статус в COMPLETED.
@@ -1192,10 +1211,12 @@ def complete_estimate(current_user: Annotated[dict, Depends(get_current_user)], 
     estimate = get_db_object_or_404(Estimate, estimate_id, session)
 
     if estimate.status != EstimateStatusEnum.IN_PROGRESS:
-        raise HTTPException(status_code=400, detail="Можно завершить только смету в статусе 'В работе'.")
+        raise HTTPException(
+            status_code=400, detail="Можно завершить только смету в статусе 'В работе'.")
 
     if not estimate.worker_id:
-        raise HTTPException(status_code=400, detail="Смета не привязана к работнику. Сначала отгрузите смету или привяжите работника.")
+        raise HTTPException(
+            status_code=400, detail="Смета не привязана к работнику. Сначала отгрузите смету или привяжите работника.")
 
     # Для каждой позиции создаём движение списания по смете. Глобальные остатки не меняем
     # (они уже уменьшились при отгрузке). Это лишь отмечает окончательное списание у работника.
@@ -1380,6 +1401,8 @@ def cancel_estimate_completion(
     return {"message": f"Выполнение сметы №{estimate.estimate_number} отменено. Товары возвращены на склад."}
 
 # --- Эндпоинты для Договоров (Contracts) ---
+
+
 @app.post("/contracts/", response_model=Contract, summary="Создать договор", tags=["Договоры"])
 def create_contract(current_user: Annotated[dict, Depends(get_current_user)], contract: Contract, session: Session = Depends(get_session)):
     user_id = current_user.get('sub')
@@ -1394,14 +1417,18 @@ def create_contract(current_user: Annotated[dict, Depends(get_current_user)], co
 def read_contracts(
     current_user: Annotated[dict, Depends(get_current_user)],
     session: Session = Depends(get_session),
-    search: Optional[str] = Query(None, description="Поиск по номеру договора или имени клиента"),
-    sort_by: Optional[str] = Query('contract_date', description="Поле сортировки: contract_number|contract_date"),
-    order: Optional[str] = Query('desc', description="Порядок сортировки: asc|desc")
+    search: Optional[str] = Query(
+        None, description="Поиск по номеру договора или имени клиента"),
+    sort_by: Optional[str] = Query(
+        'contract_date', description="Поле сортировки: contract_number|contract_date"),
+    order: Optional[str] = Query(
+        'desc', description="Порядок сортировки: asc|desc")
 ):
     q = select(Contract)
     if search:
         term = f"%{search}%"
-        q = q.where(or_(Contract.contract_number.ilike(term), Contract.client_name.ilike(term)))
+        q = q.where(or_(Contract.contract_number.ilike(
+            term), Contract.client_name.ilike(term)))
 
     # Sorting
     if sort_by == 'contract_number':
@@ -1441,13 +1468,143 @@ def update_contract(current_user: Annotated[dict, Depends(get_current_user)], co
 
 @app.post("/contracts/{contract_id}/write-off-pipes", response_model=Contract, summary="Списать трубы и завершить договор", tags=["Договоры"])
 def write_off_pipes(current_user: Annotated[dict, Depends(get_current_user)], contract_id: int, session: Session = Depends(get_session)):
-    # NOTE: basic implementation - mark contract as completed. Stock adjustments can be added later.
+    # Improved implementation: deduct pipes from stock and record movements, then complete contract.
     db_contract = get_db_object_or_404(Contract, contract_id, session)
+
+    steel_m = float(db_contract.pipe_steel_used or 0.0)
+    plastic_m = float(db_contract.pipe_plastic_used or 0.0)
+
+    # Helper to find product with fallbacks similar to calculate_contract_revenue
+    def find_product_by_type(default_sku: str, sku_like: str, name_like: str):
+        p = session.exec(select(Product).where(
+            Product.internal_sku == default_sku)).first()
+        if p:
+            return p
+        try:
+            p = session.exec(select(Product).where(
+                Product.internal_sku.ilike(sku_like))).first()
+            if p:
+                return p
+            p = session.exec(select(Product).where(
+                Product.name.ilike(name_like))).first()
+            return p
+        except Exception:
+            return None
+
+    movements_created = []
+
+    # Steel
+    if steel_m and steel_m > 0:
+        steel_prod = find_product_by_type(
+            'PIPE_STEEL_133_ST20', '%STEEL%', '%сталь%')
+        if steel_prod:
+            old_qty = float(steel_prod.stock_quantity or 0.0)
+            steel_prod.stock_quantity = old_qty - steel_m
+            movement = StockMovement(product_id=steel_prod.id, quantity=-steel_m,
+                                     type=MovementTypeEnum.WRITE_OFF_CONTRACT, stock_after=steel_prod.stock_quantity)
+            session.add(steel_prod)
+            session.add(movement)
+            movements_created.append(
+                {'product': steel_prod.name, 'deducted': steel_m, 'after': steel_prod.stock_quantity})
+        else:
+            logger.warning(
+                f"Steel pipe product not found, cannot deduct {steel_m} m for contract {contract_id}")
+
+    # Plastic
+    if plastic_m and plastic_m > 0:
+        plastic_prod = find_product_by_type(
+            'PIPE_PLASTIC_110_6_1', '%PLASTIC%', '%пластик%')
+        if plastic_prod:
+            old_qty = float(plastic_prod.stock_quantity or 0.0)
+            plastic_prod.stock_quantity = old_qty - plastic_m
+            movement = StockMovement(product_id=plastic_prod.id, quantity=-plastic_m,
+                                     type=MovementTypeEnum.WRITE_OFF_CONTRACT, stock_after=plastic_prod.stock_quantity)
+            session.add(plastic_prod)
+            session.add(movement)
+            movements_created.append(
+                {'product': plastic_prod.name, 'deducted': plastic_m, 'after': plastic_prod.stock_quantity})
+        else:
+            logger.warning(
+                f"Plastic pipe product not found, cannot deduct {plastic_m} m for contract {contract_id}")
+
+    # Mark contract completed
     db_contract.status = ContractStatusEnum.COMPLETED
     session.add(db_contract)
     session.commit()
     session.refresh(db_contract)
+
+    # Return the updated contract (frontend expects the contract object).
     return db_contract
+
+
+@app.post('/contracts/write-off-all-pipes', summary='Массовое списание труб по всем договором (IN_PROGRESS)', tags=['Договоры'])
+def write_off_all_pipes(current_user: Annotated[dict, Depends(get_current_user)], no_history: bool = Query(False, description='Если true — не создавать записи истории, только скорректировать остатки'), session: Session = Depends(get_session)):
+    """Агрегирует все незавершенные договоры и спишет с склада суммарное количество труб.
+    Создаёт по одной записи списания на каждый продукт (сталь/пластик).
+    """
+    contracts = session.exec(select(Contract).where(
+        Contract.status == ContractStatusEnum.IN_PROGRESS)).all()
+    total_steel = 0.0
+    total_plastic = 0.0
+    contract_ids = []
+    for c in contracts:
+        total_steel += float(c.pipe_steel_used or 0.0)
+        total_plastic += float(c.pipe_plastic_used or 0.0)
+        contract_ids.append(c.id)
+
+    movements_created = []
+
+    def find_product_by_type(default_sku: str, sku_like: str, name_like: str):
+        p = session.exec(select(Product).where(
+            Product.internal_sku == default_sku)).first()
+        if p:
+            return p
+        try:
+            p = session.exec(select(Product).where(
+                Product.internal_sku.ilike(sku_like))).first()
+            if p:
+                return p
+            p = session.exec(select(Product).where(
+                Product.name.ilike(name_like))).first()
+            return p
+        except Exception:
+            return None
+
+    if total_steel > 0:
+        steel_prod = find_product_by_type(
+            'PIPE_STEEL_133_ST20', '%STEEL%', '%сталь%')
+        if steel_prod:
+            old_qty = float(steel_prod.stock_quantity or 0.0)
+            steel_prod.stock_quantity = old_qty - total_steel
+            session.add(steel_prod)
+            if not no_history:
+                movement = StockMovement(product_id=steel_prod.id, quantity=-total_steel,
+                                         type=MovementTypeEnum.WRITE_OFF_CONTRACT, stock_after=steel_prod.stock_quantity)
+                session.add(movement)
+            movements_created.append(
+                {'product': steel_prod.name, 'deducted': total_steel, 'after': steel_prod.stock_quantity})
+
+    if total_plastic > 0:
+        plastic_prod = find_product_by_type(
+            'PIPE_PLASTIC_110_6_1', '%PLASTIC%', '%пластик%')
+        if plastic_prod:
+            old_qty = float(plastic_prod.stock_quantity or 0.0)
+            plastic_prod.stock_quantity = old_qty - total_plastic
+            session.add(plastic_prod)
+            if not no_history:
+                movement = StockMovement(product_id=plastic_prod.id, quantity=-total_plastic,
+                                         type=MovementTypeEnum.WRITE_OFF_CONTRACT, stock_after=plastic_prod.stock_quantity)
+                session.add(movement)
+            movements_created.append(
+                {'product': plastic_prod.name, 'deducted': total_plastic, 'after': plastic_prod.stock_quantity})
+
+    # Mark all contracts completed
+    if contract_ids:
+        session.exec(text(
+            f"UPDATE contract SET status = '{ContractStatusEnum.COMPLETED.value}' WHERE id IN ({','.join(str(i) for i in contract_ids)})"))
+
+    session.commit()
+    return {'contracts_processed': len(contract_ids), 'movements': movements_created}
 
 
 @app.get("/contracts/{contract_id}/generate-docx", summary="Сгенерировать договор .docx", tags=["Договоры"])
@@ -1470,7 +1627,8 @@ def generate_contract_docx(
 
     template_path = os.path.join('templates', tmpl_name)
     if not os.path.exists(template_path):
-        raise HTTPException(status_code=500, detail="Шаблон договора не найден")
+        raise HTTPException(
+            status_code=500, detail="Шаблон договора не найден")
 
     # Подготавливаем контекст для шаблона. Оставляем наиболее востребованные поля.
     # prefer contract.contract_date if present so historical contracts show their original date in documents
@@ -1485,9 +1643,11 @@ def generate_contract_docx(
         contract_date_obj = date.today()
 
     # prepare min_price formatted
-    raw_min_price = getattr(contract, 'min_price', None) or float(config.MIN_WELL_COST)
+    raw_min_price = getattr(contract, 'min_price',
+                            None) or float(config.MIN_WELL_COST)
     try:
-        min_price_formatted = f"{int(round(float(raw_min_price))):,}".replace(',', ' ') + ' ₽'
+        min_price_formatted = f"{int(round(float(raw_min_price))):,}".replace(
+            ',', ' ') + ' ₽'
     except Exception:
         min_price_formatted = str(raw_min_price)
 
@@ -1507,9 +1667,9 @@ def generate_contract_docx(
         'actual_depth_soil': contract.actual_depth_soil or 0,
         'actual_depth_rock': contract.actual_depth_rock or 0,
         'pipe_steel_used': contract.pipe_steel_used or 0,
-    'pipe_plastic_used': contract.pipe_plastic_used or 0,
-    'contract_date': getattr(contract, 'contract_date', None),
-    'min_price': getattr(contract, 'min_price', None) or config.MIN_WELL_COST,
+        'pipe_plastic_used': contract.pipe_plastic_used or 0,
+        'contract_date': getattr(contract, 'contract_date', None),
+        'min_price': getattr(contract, 'min_price', None) or config.MIN_WELL_COST,
     }
 
     with tempfile.NamedTemporaryFile(delete=False, suffix=".docx") as tmp:
@@ -1531,14 +1691,17 @@ def calculate_contract_revenue(current_user: Annotated[dict, Depends(get_current
     price_rock = contract.price_per_meter_rock
 
     if price_soil is None or price_rock is None:
-        raise HTTPException(status_code=400, detail='В договоре не заданы цены за метр (до скалы/по скале).')
+        raise HTTPException(
+            status_code=400, detail='В договоре не заданы цены за метр (до скалы/по скале).')
 
     meters_soil = float(req.meters_soil or 0.0)
     meters_rock = float(req.meters_rock or 0.0)
 
     # meters used (take from request first, then contract values)
-    steel_pipe_m = float(req.steel_pipe_meters) if req.steel_pipe_meters is not None else (float(contract.pipe_steel_used) if contract.pipe_steel_used is not None else 0.0)
-    plastic_pipe_m = float(req.plastic_pipe_meters) if req.plastic_pipe_meters is not None else (float(contract.pipe_plastic_used) if contract.pipe_plastic_used is not None else 0.0)
+    steel_pipe_m = float(req.steel_pipe_meters) if req.steel_pipe_meters is not None else (
+        float(contract.pipe_steel_used) if contract.pipe_steel_used is not None else 0.0)
+    plastic_pipe_m = float(req.plastic_pipe_meters) if req.plastic_pipe_meters is not None else (
+        float(contract.pipe_plastic_used) if contract.pipe_plastic_used is not None else 0.0)
 
     # Attempt to read pipe prices from products in warehouse. If request explicitly provides per-meter prices, use them;
     # otherwise try to lookup products by internal_sku (from request or defaults) and take their purchase/retail prices.
@@ -1548,43 +1711,81 @@ def calculate_contract_revenue(current_user: Annotated[dict, Depends(get_current
     steel_sku = req.steel_internal_sku or DEFAULT_STEEL_SKU
     plastic_sku = req.plastic_internal_sku or DEFAULT_PLASTIC_SKU
 
-    # lookup products
-    steel_product = session.exec(select(Product).where(Product.internal_sku == steel_sku)).first()
-    plastic_product = session.exec(select(Product).where(Product.internal_sku == plastic_sku)).first()
+    # lookup products by SKU; if not found, try simple fallbacks (by SKU pattern or name) to be more robust
+    steel_product = session.exec(select(Product).where(
+        Product.internal_sku == steel_sku)).first()
+    plastic_product = session.exec(select(Product).where(
+        Product.internal_sku == plastic_sku)).first()
+
+    # Fallbacks: try to find by SKU pattern or by name containing 'пластик' / 'сталь'
+    try:
+        if not steel_product:
+            steel_product = session.exec(select(Product).where(
+                Product.internal_sku.ilike('%STEEL%'))).first()
+        if not steel_product:
+            steel_product = session.exec(select(Product).where(
+                Product.name.ilike('%сталь%'))).first()
+    except Exception:
+        logger.debug(
+            'Fallback lookup for steel product failed or not supported by DB.')
+
+    try:
+        if not plastic_product:
+            plastic_product = session.exec(select(Product).where(
+                Product.internal_sku.ilike('%PLASTIC%'))).first()
+        if not plastic_product:
+            plastic_product = session.exec(select(Product).where(
+                Product.name.ilike('%пластик%'))).first()
+    except Exception:
+        logger.debug(
+            'Fallback lookup for plastic product failed or not supported by DB.')
 
     # prices per meter (purchase and retail)
-    steel_purchase_price = float(steel_product.purchase_price) if steel_product and steel_product.purchase_price is not None else 0.0
-    steel_retail_price = float(steel_product.retail_price) if steel_product and steel_product.retail_price is not None else 0.0
+    steel_purchase_price = float(
+        steel_product.purchase_price) if steel_product and steel_product.purchase_price is not None else 0.0
+    steel_retail_price = float(
+        steel_product.retail_price) if steel_product and steel_product.retail_price is not None else 0.0
 
-    plastic_purchase_price = float(plastic_product.purchase_price) if plastic_product and plastic_product.purchase_price is not None else 0.0
-    plastic_retail_price = float(plastic_product.retail_price) if plastic_product and plastic_product.retail_price is not None else 0.0
+    plastic_purchase_price = float(
+        plastic_product.purchase_price) if plastic_product and plastic_product.purchase_price is not None else 0.0
+    plastic_retail_price = float(
+        plastic_product.retail_price) if plastic_product and plastic_product.retail_price is not None else 0.0
 
     # If caller provided explicit per-meter prices, prefer them (applied as retail/purchase both equal to provided price)
     if req.steel_pipe_price_per_meter is not None:
-        steel_retail_price = steel_purchase_price = float(req.steel_pipe_price_per_meter)
+        steel_retail_price = steel_purchase_price = float(
+            req.steel_pipe_price_per_meter)
     if req.plastic_pipe_price_per_meter is not None:
-        plastic_retail_price = plastic_purchase_price = float(req.plastic_pipe_price_per_meter)
+        plastic_retail_price = plastic_purchase_price = float(
+            req.plastic_pipe_price_per_meter)
 
     drilling_soil_cost = price_soil * meters_soil
     drilling_rock_cost = price_rock * meters_rock
     drilling_only = drilling_soil_cost + drilling_rock_cost
+    # keep original drilling sum for detail, we'll choose the drilling value used in totals below
+    original_drilling_only = drilling_only
 
     # pipe costs: purchase (закуп) and retail (розница)
-    pipe_cost_purchase = steel_purchase_price * steel_pipe_m + plastic_purchase_price * plastic_pipe_m
-    pipe_cost_retail = steel_retail_price * steel_pipe_m + plastic_retail_price * plastic_pipe_m
+    pipe_cost_purchase = steel_purchase_price * \
+        steel_pipe_m + plastic_purchase_price * plastic_pipe_m
+    pipe_cost_retail = steel_retail_price * \
+        steel_pipe_m + plastic_retail_price * plastic_pipe_m
 
     subtotal = drilling_only + pipe_cost_retail
 
     # Determine applied minimum: preference to request, otherwise use configured MIN_WELL_COST
-    applied_min = float(req.min_price) if req.min_price is not None else float(config.MIN_WELL_COST)
+    applied_min = float(req.min_price) if req.min_price is not None else float(
+        config.MIN_WELL_COST)
     min_applied_flag = False
     # min price applies to drilling part only — if min is greater, use it instead of drilling_only
     if applied_min > drilling_only:
         # use the configured/requested minimum for drilling part
         total = applied_min + pipe_cost_retail
+        drilling_used_for_total = applied_min
         min_applied_flag = True
     else:
         total = subtotal
+        drilling_used_for_total = drilling_only
 
     # Build detailed line items
     items: List[RevenueDetailItem] = []
@@ -1612,16 +1813,20 @@ def calculate_contract_revenue(current_user: Annotated[dict, Depends(get_current
         price=steel_retail_price,
         quantity=steel_pipe_m,
         unit="метр",
-        sum=round(steel_retail_price * steel_pipe_m, 2) if steel_pipe_m else None,
-        purchase_sum=round(steel_purchase_price * steel_pipe_m, 2) if steel_pipe_m else None
+        sum=round(steel_retail_price * steel_pipe_m,
+                  2) if steel_pipe_m else None,
+        purchase_sum=round(steel_purchase_price *
+                           steel_pipe_m, 2) if steel_pipe_m else None
     ))
     items.append(RevenueDetailItem(
         name=f"Пластиковая труба {plastic_sku}",
         price=plastic_retail_price,
         quantity=plastic_pipe_m,
         unit="метр",
-        sum=round(plastic_retail_price * plastic_pipe_m, 2) if plastic_pipe_m else None,
-        purchase_sum=round(plastic_purchase_price * plastic_pipe_m, 2) if plastic_pipe_m else None
+        sum=round(plastic_retail_price * plastic_pipe_m,
+                  2) if plastic_pipe_m else None,
+        purchase_sum=round(plastic_purchase_price *
+                           plastic_pipe_m, 2) if plastic_pipe_m else None
     ))
 
     # If minimal drilling price was applied, add a line to show adjusted drilling cost
@@ -1635,16 +1840,18 @@ def calculate_contract_revenue(current_user: Annotated[dict, Depends(get_current
             purchase_sum=None
         ))
 
-    # subtotal and net profit
-    net_profit = round((subtotal - pipe_cost_purchase), 2)
+    # subtotal and net profit: net profit must be computed from the final total so pipe costs are always considered
+    # adjust subtotal to reflect the drilling amount actually used (original or applied minimum)
+    adjusted_subtotal = drilling_used_for_total + pipe_cost_retail
+    net_profit = round((total - pipe_cost_purchase), 2)
 
     return RevenueDetailResponse(
         contract_id=contract_id,
         items=items,
-        drilling_only=round(drilling_only, 2),
+        drilling_only=round(drilling_used_for_total, 2),
         pipe_cost_purchase=round(pipe_cost_purchase, 2),
         pipe_cost_retail=round(pipe_cost_retail, 2),
-        subtotal=round(subtotal, 2),
+        subtotal=round(adjusted_subtotal, 2),
         applied_min_price=applied_min,
         total=round(total, 2),
         net_profit=net_profit
@@ -1743,31 +1950,45 @@ def get_drilling_profit_report(
     end_date: Optional[date] = None,
     session: Session = Depends(get_session)
 ):
-    query = select(Contract).where(Contract.contract_type == ContractTypeEnum.DRILLING, Contract.status == ContractStatusEnum.COMPLETED)
+    # 1. ФИЛЬТРАЦИЯ: Убеждаемся, что тип договора СТРОГО 'DRILLING'
+    query = select(Contract).where(
+        Contract.contract_type == ContractTypeEnum.DRILLING,
+        Contract.status == ContractStatusEnum.COMPLETED
+    )
+
     if start_date and end_date:
-        query = query.where(Contract.contract_date >= start_date, Contract.contract_date < (end_date + timedelta(days=1)))
+        query = query.where(Contract.contract_date >= start_date,
+                            Contract.contract_date < (end_date + timedelta(days=1)))
+
+    # 2. СОРТИРОВКА: Добавляем сортировку по номеру договора по возрастанию
+    query = query.order_by(Contract.contract_number.asc())
+
     contracts = session.exec(query).all()
 
     items: List[DrillingProfitItem] = []
     grand_profit = 0.0
     for c in contracts:
-        # compute drilling revenue using existing calculation logic: call calculate_contract_revenue internally
-        # We replicate small part of logic here for simplicity
+        # Эта логика расчета у вас уже была и она корректна
         price_soil = c.price_per_meter_soil or 0.0
         price_rock = c.price_per_meter_rock or 0.0
         meters_soil = float(c.actual_depth_soil or 0.0)
         meters_rock = float(c.actual_depth_rock or 0.0)
         drilling_retail = price_soil * meters_soil + price_rock * meters_rock
 
-        # pipe costs
         steel_m = float(c.pipe_steel_used or 0.0)
         plastic_m = float(c.pipe_plastic_used or 0.0)
-        steel_prod = session.exec(select(Product).where(Product.internal_sku == 'PIPE_STEEL_133_ST20')).first()
-        plastic_prod = session.exec(select(Product).where(Product.internal_sku == 'PIPE_PLASTIC_110_6_1')).first()
-        steel_purchase = float(steel_prod.purchase_price) if steel_prod and steel_prod.purchase_price is not None else 0.0
-        steel_retail = float(steel_prod.retail_price) if steel_prod and steel_prod.retail_price is not None else 0.0
-        plastic_purchase = float(plastic_prod.purchase_price) if plastic_prod and plastic_prod.purchase_price is not None else 0.0
-        plastic_retail = float(plastic_prod.retail_price) if plastic_prod and plastic_prod.retail_price is not None else 0.0
+        steel_prod = session.exec(select(Product).where(
+            Product.internal_sku == 'PIPE_STEEL_133_ST20')).first()
+        plastic_prod = session.exec(select(Product).where(
+            Product.internal_sku == 'PIPE_PLASTIC_110_6_1')).first()
+        steel_purchase = float(
+            steel_prod.purchase_price) if steel_prod and steel_prod.purchase_price is not None else 0.0
+        steel_retail = float(
+            steel_prod.retail_price) if steel_prod and steel_prod.retail_price is not None else 0.0
+        plastic_purchase = float(
+            plastic_prod.purchase_price) if plastic_prod and plastic_prod.purchase_price is not None else 0.0
+        plastic_retail = float(
+            plastic_prod.retail_price) if plastic_prod and plastic_prod.retail_price is not None else 0.0
         pipe_purchase = steel_purchase * steel_m + plastic_purchase * plastic_m
         pipe_retail = steel_retail * steel_m + plastic_retail * plastic_m
 
@@ -1775,11 +1996,13 @@ def get_drilling_profit_report(
         grand_profit += profit
         items.append(DrillingProfitItem(
             contract_id=c.id, contract_number=c.contract_number, client_name=c.client_name,
-            completed_at=c.contract_date.date(), drilling_retail=round(drilling_retail,2), drilling_purchase=0.0,
-            pipe_purchase=round(pipe_purchase,2), pipe_retail=round(pipe_retail,2), profit=round(profit,2)
+            completed_at=c.contract_date.date(), drilling_retail=round(drilling_retail, 2), drilling_purchase=0.0,
+            pipe_purchase=round(pipe_purchase, 2), pipe_retail=round(pipe_retail, 2), profit=round(profit, 2)
         ))
 
-    return DrillingProfitResponse(items=items, grand_total_profit=round(grand_profit,2))
+    # 3. ИТОГОВАЯ СУММА: Она уже здесь рассчитывается и возвращается
+    # Вам нужно просто отобразить ее на фронтенде
+    return DrillingProfitResponse(items=items, grand_total_profit=round(grand_profit, 2))
 
 
 @app.get("/dashboard/summary", response_model=DashboardSummary, summary="Сводка для дашборда", tags=["Дашборд"])

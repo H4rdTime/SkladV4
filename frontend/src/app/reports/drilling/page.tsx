@@ -1,61 +1,127 @@
+// src/app/reports/drilling/page.tsx
 'use client';
 
 import { useState, useEffect } from 'react';
-import { fetchApi } from '@/lib/api';
+import { fetchApi } from '@/lib/api'; // Убедитесь, что путь к вашей функции fetchApi верный
 import toast from 'react-hot-toast';
+import { format } from 'date-fns'; // Для удобного форматирования дат
 
-export default function DrillingReportsPage(){
-    const [items, setItems] = useState<any[]>([]);
+// Определяем типы для данных из API для лучшей читаемости и безопасности
+interface DrillingReportItem {
+    contract_id: number;
+    contract_number: string;
+    client_name: string;
+    drilling_retail: number;
+    pipe_purchase: number;
+    pipe_retail: number;
+    profit: number;
+}
+
+interface DrillingReportData {
+    items: DrillingReportItem[];
+    grand_total_profit: number;
+}
+
+export default function DrillingReportsPage() {
+    // Используем типизированное состояние для большей надежности
+    const [reportData, setReportData] = useState<DrillingReportData | null>(null);
     const [isLoading, setIsLoading] = useState(true);
-    const [startDate, setStartDate] = useState(new Date(new Date().setDate(new Date().getDate()-30)).toISOString().split('T')[0]);
-    const [endDate, setEndDate] = useState(new Date().toISOString().split('T')[0]);
+    
+    // Устанавливаем даты по умолчанию
+    const today = new Date();
+    const thirtyDaysAgo = new Date();
+    thirtyDaysAgo.setDate(today.getDate() - 30);
 
-    useEffect(()=>{
-        const fetch = async ()=>{
+    const [startDate, setStartDate] = useState(format(thirtyDaysAgo, 'yyyy-MM-dd'));
+    const [endDate, setEndDate] = useState(format(today, 'yyyy-MM-dd'));
+
+    useEffect(() => {
+        const fetchReport = async () => {
             setIsLoading(true);
-            try{
+            try {
+                // Формируем URL с параметрами дат
                 const url = `/reports/drilling-profit?start_date=${startDate}&end_date=${endDate}`;
-                const data = await fetchApi(url);
-                setItems(data.items || []);
-            }catch(e:any){ toast.error(e.message); }
-            finally{ setIsLoading(false); }
+                const data: DrillingReportData = await fetchApi(url);
+                setReportData(data); // Сохраняем все данные, включая grand_total_profit
+            } catch (e: any) {
+                toast.error(e.message || 'Не удалось загрузить отчет');
+                setReportData(null); // Сбрасываем данные в случае ошибки
+            } finally {
+                setIsLoading(false);
+            }
         };
-        fetch();
+
+        // Запускаем загрузку только если даты корректны
+        if (startDate && endDate) {
+            fetchReport();
+        }
     }, [startDate, endDate]);
 
     return (
         <main className="container mx-auto p-4">
-            <h1 className="text-2xl font-bold mb-4">Отчет по прибыли (бурение)</h1>
-            <div className="mb-4 flex gap-2">
-                <input type="date" value={startDate} onChange={e=>setStartDate(e.target.value)} className="p-1 border rounded" />
-                <input type="date" value={endDate} onChange={e=>setEndDate(e.target.value)} className="p-1 border rounded" />
+            <div className="flex justify-between items-center mb-4">
+                <h1 className="text-2xl font-bold">Отчет по прибыли (бурение)</h1>
+                <div className="flex items-center gap-4">
+                    <input 
+                        type="date" 
+                        value={startDate} 
+                        onChange={e => setStartDate(e.target.value)} 
+                        className="p-2 border rounded-md shadow-sm" 
+                    />
+                    <span className="text-gray-500">-</span>
+                    <input 
+                        type="date" 
+                        value={endDate} 
+                        onChange={e => setEndDate(e.target.value)} 
+                        className="p-2 border rounded-md shadow-sm" 
+                    />
+                </div>
             </div>
 
-            {isLoading ? <p>Загрузка...</p> : (
-                <table className="min-w-full text-sm">
-                    <thead className="bg-gray-50 border-b-2">
-                        <tr>
-                            <th className="p-2 text-left">Договор</th>
-                            <th className="p-2 text-left">Клиент</th>
-                            <th className="p-2 text-right">Выручка бурение</th>
-                            <th className="p-2 text-right">Стоимость труб (закуп)</th>
-                            <th className="p-2 text-right">Стоимость труб (розн.)</th>
-                            <th className="p-2 text-right">Прибыль</th>
-                        </tr>
-                    </thead>
-                    <tbody>
-                        {items.map(it=> (
-                            <tr key={it.contract_id}>
-                                <td className="p-2">{it.contract_number}</td>
-                                <td className="p-2">{it.client_name}</td>
-                                <td className="p-2 text-right">{it.drilling_retail.toFixed(2)} ₽</td>
-                                <td className="p-2 text-right">{it.pipe_purchase.toFixed(2)} ₽</td>
-                                <td className="p-2 text-right">{it.pipe_retail.toFixed(2)} ₽</td>
-                                <td className="p-2 text-right font-bold text-green-700">{it.profit.toFixed(2)} ₽</td>
-                            </tr>
-                        ))}
-                    </tbody>
-                </table>
+            {isLoading ? <p className="text-center mt-8">Загрузка данных...</p> : (
+                reportData && (
+                    <>
+                        <div className="overflow-x-auto bg-white rounded-lg shadow">
+                            <table className="min-w-full text-sm">
+                                <thead className="bg-gray-100 border-b-2 border-gray-200">
+                                    <tr>
+                                        <th className="p-3 text-left font-semibold text-gray-600">Договор</th>
+                                        <th className="p-3 text-left font-semibold text-gray-600">Клиент</th>
+                                        <th className="p-3 text-right font-semibold text-gray-600">Выручка бурение</th>
+                                        <th className="p-3 text-right font-semibold text-gray-600">Стоимость труб (закуп)</th>
+                                        <th className="p-3 text-right font-semibold text-gray-600">Стоимость труб (розн.)</th>
+                                        <th className="p-3 text-right font-semibold text-gray-600">Прибыль</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    {reportData.items.map((item) => (
+                                        <tr key={item.contract_id} className="border-b border-gray-200 hover:bg-gray-50">
+                                            <td className="p-3">{item.contract_number}</td>
+                                            <td className="p-3">{item.client_name}</td>
+                                            <td className="p-3 text-right">{item.drilling_retail.toLocaleString('ru-RU')} ₽</td>
+                                            <td className="p-3 text-right">{item.pipe_purchase.toLocaleString('ru-RU')} ₽</td>
+                                            <td className="p-3 text-right">{item.pipe_retail.toLocaleString('ru-RU')} ₽</td>
+                                            <td className="p-3 text-right font-bold text-green-700">{item.profit.toLocaleString('ru-RU')} ₽</td>
+                                        </tr>
+                                    ))}
+                                </tbody>
+                            </table>
+                        </div>
+                        
+                        {/* --- ОТОБРАЖЕНИЕ ИТОГОВОЙ ПРИБЫЛИ --- */}
+                        <div className="mt-6 flex justify-end">
+                             <div className="bg-gray-800 text-white p-4 rounded-lg shadow-lg">
+                                 <span className="text-lg font-semibold">Общая прибыль за период: </span>
+                                 <span className="text-xl font-bold ml-2">
+                                     {reportData.grand_total_profit.toLocaleString('ru-RU', { style: 'currency', currency: 'RUB' })}
+                                 </span>
+                             </div>
+                        </div>
+                    </>
+                )
+            )}
+            {!isLoading && !reportData?.items.length && (
+                 <p className="text-center mt-8 text-gray-500">Нет данных за выбранный период.</p>
             )}
         </main>
     );
