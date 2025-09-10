@@ -73,8 +73,8 @@ export default function ContractForm({ contractId }: ContractFormProps) {
     }, [contractId]);
 
     const numericFields = new Set([
-        'estimated_depth','price_per_meter_soil','price_per_meter_rock','min_price',
-        'actual_depth_soil','actual_depth_rock','pipe_steel_used','pipe_plastic_used'
+        'estimated_depth', 'price_per_meter_soil', 'price_per_meter_rock', 'min_price',
+        'actual_depth_soil', 'actual_depth_rock', 'pipe_steel_used', 'pipe_plastic_used'
     ]);
 
     const handleChange = (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>) => {
@@ -155,8 +155,8 @@ export default function ContractForm({ contractId }: ContractFormProps) {
                     min_price: null
                 };
                 // if contract doesn't have per-meter prices, allow min_price passing
-                if (formData.price_per_meter_soil == null || formData.price_per_meter_rock == null) {
-                    payload.min_price = null;
+                if (formData.price_per_meter_soil == null && formData.price_per_meter_rock == null) {
+                    payload.min_price = formData.min_price ?? null;
                 }
                 const res = await fetchApi(`/contracts/${contractId}/calculate-revenue`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
                 setCalcResult(res);
@@ -177,7 +177,7 @@ export default function ContractForm({ contractId }: ContractFormProps) {
                 steel_pipe_price_per_meter: undefined,
                 plastic_pipe_meters: Number(formData.pipe_plastic_used || 0),
                 plastic_pipe_price_per_meter: undefined,
-                min_price: null
+                min_price: formData.min_price ?? null
             } as any;
             const res = await fetchApi(`/contracts/${contractId}/calculate-revenue`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
             setCalcResult(res);
@@ -212,7 +212,7 @@ export default function ContractForm({ contractId }: ContractFormProps) {
             if (!response.ok) {
                 // try to parse JSON error
                 let errMsg = 'Ошибка генерации файла';
-                try { const j = await response.json(); errMsg = j.detail || j.message || errMsg; } catch (e) {}
+                try { const j = await response.json(); errMsg = j.detail || j.message || errMsg; } catch (e) { }
                 throw new Error(errMsg);
             }
             const blob = await response.blob();
@@ -310,7 +310,7 @@ export default function ContractForm({ contractId }: ContractFormProps) {
                                 <input type="number" step="0.01" name="price_per_meter_soil" value={formData.price_per_meter_soil ?? ''} onChange={handleChange} placeholder="Цена (до скалы)" className="border p-2 rounded-md" />
                                 <input type="number" step="0.01" name="price_per_meter_rock" value={formData.price_per_meter_rock ?? ''} onChange={handleChange} placeholder="Цена (по скале)" className="border p-2 rounded-md" />
                                 <div></div>
-                                <input type="date" name="contract_date" value={formData.contract_date ? new Date(formData.contract_date).toISOString().slice(0,10) : ''} onChange={handleChange} className="border p-2 rounded-md" />
+                                <input type="date" name="contract_date" value={formData.contract_date ? new Date(formData.contract_date).toISOString().slice(0, 10) : ''} onChange={handleChange} className="border p-2 rounded-md" />
                                 <input type="number" step="0.01" name="min_price" value={formData.min_price ?? ''} onChange={handleChange} placeholder="Минимальная сумма (₽)" className="border p-2 rounded-md" />
                                 <input type="number" step="0.1" name="actual_depth_soil" value={formData.actual_depth_soil ?? ''} onChange={handleChange} placeholder="Факт (до скалы), м" className="border p-2 rounded-md" />
                                 <input type="number" step="0.1" name="actual_depth_rock" value={formData.actual_depth_rock ?? ''} onChange={handleChange} placeholder="Факт (по скале), м" className="border p-2 rounded-md" />
@@ -323,7 +323,7 @@ export default function ContractForm({ contractId }: ContractFormProps) {
                             <button type="button" onClick={() => isCreating ? router.push('/contracts') : setIsEditing(false)} className="px-4 py-2 bg-gray-200 text-gray-800 rounded-md hover:bg-gray-300">Отмена</button>
                             <div className="flex items-center space-x-2">
                                 {!isCreating && <button type="button" onClick={handleWriteOffPipes} className="px-4 py-2 bg-orange-500 text-white rounded-md hover:bg-orange-600">Списать и Завершить</button>}
-                                    <button type="submit" className="px-6 py-3 bg-blue-600 text-white font-semibold rounded-md hover:bg-blue-700 flex items-center gap-2"><Save size={18} /> {isCreating ? 'Создать' : 'Сохранить'}</button>
+                                <button type="submit" className="px-6 py-3 bg-blue-600 text-white font-semibold rounded-md hover:bg-blue-700 flex items-center gap-2"><Save size={18} /> {isCreating ? 'Создать' : 'Сохранить'}</button>
                             </div>
                         </div>
                     </div>
