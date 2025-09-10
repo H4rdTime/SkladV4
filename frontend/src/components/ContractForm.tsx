@@ -1,7 +1,7 @@
 // frontend/src/components/ContractForm.tsx
 'use client';
 
-import { useState, useEffect, FormEvent } from 'react';
+import { useState, useEffect } from 'react';
 import { fetchApi, API_URL } from '@/lib/api';
 import Cookies from 'js-cookie';
 import { useRouter } from 'next/navigation';
@@ -46,7 +46,6 @@ const ViewField = ({ label, value }: { label: string, value: any }) => (
 
 export default function ContractForm({ contractId }: ContractFormProps) {
     const router = useRouter();
-    // API_URL больше не нужен, используем fetchApi
 
     const [formData, setFormData] = useState<Partial<Contract>>({ status: 'В работе' });
     const [isLoading, setIsLoading] = useState(!!contractId);
@@ -81,7 +80,6 @@ export default function ContractForm({ contractId }: ContractFormProps) {
         const { name, value } = e.target;
         let v: any = value === '' ? null : value;
         if (v !== null && numericFields.has(name)) {
-            // coerce to number if possible
             const n = Number(v);
             v = isNaN(n) ? null : n;
         }
@@ -137,11 +135,11 @@ export default function ContractForm({ contractId }: ContractFormProps) {
     };
 
     const [calcResult, setCalcResult] = useState<null | any>(null);
-    // Auto-calc whenever relevant fields change
+
+    // Автокалькуляция при изменении данных
     useEffect(() => {
         if (!contractId) return;
-        // only auto-calc when viewing (not editing) and depths are present
-        if (isEditing) return;
+
         const perform = async () => {
             try {
                 const payload: any = {
@@ -149,24 +147,37 @@ export default function ContractForm({ contractId }: ContractFormProps) {
                     meters_rock: Number(formData.actual_depth_rock || 0),
                     steel_pipe_meters: Number(formData.pipe_steel_used || 0),
                     plastic_pipe_meters: Number(formData.pipe_plastic_used || 0),
-                    // request backend to lookup pipes by internal SKU defaults
-                    steel_internal_sku: undefined,
-                    plastic_internal_sku: undefined,
-                    min_price: null
+                    min_price: formData.min_price ?? null
                 };
-                // if contract doesn't have per-meter prices, allow min_price passing
-                if (formData.price_per_meter_soil == null && formData.price_per_meter_rock == null) {
-                    payload.min_price = formData.min_price ?? null;
-                }
-                const res = await fetchApi(`/contracts/${contractId}/calculate-revenue`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
+                const res = await fetchApi(`/contracts/${contractId}/calculate-revenue`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(payload)
+                });
                 setCalcResult(res);
+
+                // Сохраняем min_price и итог в договор
+                await fetchApi(`/contracts/${contractId}`, {
+                    method: 'PATCH',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        min_price: formData.min_price,
+                        total_sum: res.total
+                    })
+                });
             } catch (e: any) {
-                // silently ignore auto-calc errors (user can press button to see error)
                 console.debug('Auto-calc failed', e.message);
             }
         };
         perform();
-    }, [contractId, isEditing, formData.actual_depth_soil, formData.actual_depth_rock, formData.pipe_steel_used, formData.pipe_plastic_used]);
+    }, [
+        contractId,
+        formData.actual_depth_soil,
+        formData.actual_depth_rock,
+        formData.pipe_steel_used,
+        formData.pipe_plastic_used,
+        formData.min_price
+    ]);
 
     const handleCalculateRevenue = async () => {
         try {
@@ -174,13 +185,26 @@ export default function ContractForm({ contractId }: ContractFormProps) {
                 meters_soil: Number(formData.actual_depth_soil || 0),
                 meters_rock: Number(formData.actual_depth_rock || 0),
                 steel_pipe_meters: Number(formData.pipe_steel_used || 0),
-                steel_pipe_price_per_meter: undefined,
                 plastic_pipe_meters: Number(formData.pipe_plastic_used || 0),
-                plastic_pipe_price_per_meter: undefined,
                 min_price: formData.min_price ?? null
             } as any;
-            const res = await fetchApi(`/contracts/${contractId}/calculate-revenue`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
+            const res = await fetchApi(`/contracts/${contractId}/calculate-revenue`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(payload)
+            });
             setCalcResult(res);
+
+            // Сохраняем результат в договор
+            await fetchApi(`/contracts/${contractId}`, {
+                method: 'PATCH',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    min_price: formData.min_price,
+                    total_sum: res.total
+                })
+            });
+
             toast.success('Расчет выполнен');
         } catch (e: any) {
             toast.error(`Ошибка расчета: ${e.message}`);
@@ -203,14 +227,12 @@ export default function ContractForm({ contractId }: ContractFormProps) {
     const handleDownloadDocx = async () => {
         const toastId = toast.loading('Генерация документа...');
         try {
-            // Use backend API URL exported from lib/api
             const url = `${API_URL}/contracts/${contractId}/generate-docx`;
             const token = Cookies.get('accessToken');
             const headers: Record<string, string> = { 'Accept': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' };
             if (token) headers['Authorization'] = `Bearer ${token}`;
             const response = await fetch(url, { headers });
             if (!response.ok) {
-                // try to parse JSON error
                 let errMsg = 'Ошибка генерации файла';
                 try { const j = await response.json(); errMsg = j.detail || j.message || errMsg; } catch (e) { }
                 throw new Error(errMsg);
