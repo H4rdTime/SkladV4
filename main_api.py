@@ -275,6 +275,11 @@ class IssueItemRequest(BaseModel):
     quantity: float
 
 
+class ReceiveItemRequest(BaseModel):
+    product_id: int
+    quantity: float
+
+
 class ReturnItemRequest(BaseModel):
     product_id: int
     worker_id: int
@@ -458,6 +463,7 @@ class DashboardSummary(BaseModel):
     estimates_in_progress_count: int
     contracts_in_progress_count: int
     profit_last_30_days: float
+    drilling_profit_last_30_days: float
 
 
 # --- Эндпоинты для Товаров (Products) ---
@@ -631,6 +637,28 @@ def issue_item_to_worker(current_user: Annotated[dict, Depends(get_current_user)
     return movement
 
 
+@app.post("/actions/receive-item/", response_model=StockMovement, summary="Принять товар на склад (приход)", tags=["Операции"])
+def receive_item_on_stock(current_user: Annotated[dict, Depends(get_current_user)], request: ReceiveItemRequest, session: Session = Depends(get_session)):
+    """Увеличивает остаток товара и создаёт движение типа INCOME."""
+    product = get_db_object_or_404(Product, request.product_id, session)
+    if request.quantity <= 0:
+        raise HTTPException(status_code=400, detail="Количество должно быть > 0")
+
+    # Обновляем остаток
+    product.stock_quantity = (product.stock_quantity or 0) + request.quantity
+    movement = StockMovement(
+        product_id=request.product_id,
+        quantity=request.quantity,
+        type=MovementTypeEnum.INCOME,
+        stock_after=product.stock_quantity
+    )
+    session.add(product)
+    session.add(movement)
+    session.commit()
+    session.refresh(movement)
+    return movement
+
+
 @app.post("/actions/return-item/", response_model=StockMovement, summary="Принять возврат от работника", tags=["Операции"])
 def return_item_from_worker(current_user: Annotated[dict, Depends(get_current_user)], request: ReturnItemRequest, session: Session = Depends(get_session)):
     product = get_db_object_or_404(Product, request.product_id, session)
@@ -715,22 +743,85 @@ def write_off_item_from_worker(current_user: Annotated[dict, Depends(get_current
     return movement
 
 
-@app.get("/actions/history/", response_model=List[dict], summary="Получить историю всех движений", tags=["Операции"])
-def get_history(current_user: Annotated[dict, Depends(get_current_user)], session: Session = Depends(get_session)):
-    # PERFORMANCE: N+1 FIX
+class HistoryPage(BaseModel):
+    total: int
+    items: List[dict]
+
+
+@app.get("/actions/history/", response_model=HistoryPage, summary="Получить историю всех движений", tags=["Операции"])
+def get_history(
+    current_user: Annotated[dict, Depends(get_current_user)],
+    search: Optional[str] = Query(None, description="Поиск по названию товара или имени работника"),
+    worker_id: Optional[int] = Query(None, description="Фильтр по ID работника"),
+    movement_type: Optional[str] = Query(None, description="Фильтр по типу движения (например: INCOME, ISSUE_TO_WORKER)"),
+    start_date: Optional[date] = Query(None, description="Начальная дата (включительно)"),
+    end_date: Optional[date] = Query(None, description="Конечная дата (включительно)"),
+    page: int = Query(1, gt=0),
+    size: int = Query(50, gt=0, le=500),
+    session: Session = Depends(get_session)
+):
+    # PERFORMANCE: N+1 FIX + server-side filtering
     query = select(StockMovement).options(
         selectinload(StockMovement.product),
         selectinload(StockMovement.worker)
     ).order_by(StockMovement.id.desc())
-    history_records = session.exec(query).all()
-    response = []
+
+    # If explicit worker_id filter provided, apply it
+    if worker_id is not None:
+        query = query.where(StockMovement.worker_id == worker_id)
+
+    # Filter by movement type if provided
+    if movement_type:
+        query = query.where(StockMovement.type == movement_type)
+
+    # Filter by date range (timestamp assumed datetime)
+    if start_date and end_date:
+        query = query.where(StockMovement.timestamp >= datetime.combine(start_date, datetime.min.time()),
+                            StockMovement.timestamp < datetime.combine(end_date + timedelta(days=1), datetime.min.time()))
+
+    # If search provided, try to match product by name/sku or worker by name
+    if search:
+        term = f"%{search}%"
+        # find matching products
+        prod_ids = session.exec(select(Product.id).where(
+            or_(
+                Product.name.ilike(term),
+                Product.internal_sku.ilike(term),
+                Product.supplier_sku.ilike(term)
+            )
+        )).all()
+        # find matching workers
+        worker_ids = session.exec(select(Worker.id).where(Worker.name.ilike(term))).all()
+
+        # If nothing matches, return empty list early
+        if not prod_ids and not worker_ids:
+            return []
+
+        # Apply appropriate filtering depending on which matches exist
+        conds = []
+        if prod_ids:
+            conds.append(StockMovement.product_id.in_(prod_ids))
+        if worker_ids:
+            conds.append(StockMovement.worker_id.in_(worker_ids))
+
+        if conds:
+            query = query.where(or_(*conds))
+
+    # Pagination
+    count_query = select(func.count()).select_from(query.subquery())
+    total_count = session.exec(count_query).one()
+    offset = (page - 1) * size
+    paginated = query.offset(offset).limit(size)
+    history_records = session.exec(paginated).all()
+
+    response_items = []
     for m in history_records:
-        response.append({
+        response_items.append({
             "id": m.id, "timestamp": m.timestamp, "type": m.type, "quantity": m.quantity, "stock_after": m.stock_after,
             "product": {"name": m.product.name if m.product and not m.product.is_deleted else "Товар удален"},
             "worker": {"name": m.worker.name} if m.worker else None
         })
-    return response
+    return HistoryPage(total=total_count, items=response_items)
 
 
 @app.post("/actions/history/cancel/{movement_id}", summary="Отменить движение товара", tags=["Операции"])
@@ -1256,11 +1347,25 @@ def complete_estimate(current_user: Annotated[dict, Depends(get_current_user)], 
 
 
 @app.patch("/estimates/{estimate_id}/items/{item_id}", response_model=EstimateItem, summary="Обновить позицию в смете", tags=["Сметы"])
-def update_estimate_item(current_user: Annotated[dict, Depends(get_current_user)], estimate_id: int, item_id: int, quantity: float = Query(..., gt=0), session: Session = Depends(get_session)):
+def update_estimate_item(current_user: Annotated[dict, Depends(get_current_user)], estimate_id: int, item_id: int,
+                         quantity: Optional[float] = Query(None, gt=0), unit_price: Optional[float] = Query(None, ge=0),
+                         session: Session = Depends(get_session)):
+    """Обновляет отдельную позицию сметы. Позволяет менять количество и/или цену единицы.
+    Блокирует изменения для уже завершенных смет.
+    """
     item = get_db_object_or_404(EstimateItem, item_id, session)
     if item.estimate_id != estimate_id:
         raise HTTPException(status_code=404, detail="Позиция сметы не найдена")
-    item.quantity = quantity
+
+    estimate = get_db_object_or_404(Estimate, estimate_id, session)
+    if estimate.status == EstimateStatusEnum.COMPLETED:
+        raise HTTPException(status_code=400, detail="Нельзя редактировать позицию завершенной сметы.")
+
+    if quantity is not None:
+        item.quantity = quantity
+    if unit_price is not None:
+        item.unit_price = unit_price
+
     session.add(item)
     session.commit()
     session.refresh(item)
@@ -1399,6 +1504,80 @@ def cancel_estimate_completion(
     session.commit()
 
     return {"message": f"Выполнение сметы №{estimate.estimate_number} отменено. Товары возвращены на склад."}
+
+
+@app.post("/estimates/{estimate_id}/cancel", summary="Отменить смету в работе и вернуть товары на склад", tags=["Сметы"])
+def cancel_in_progress_estimate(
+    current_user: Annotated[dict, Depends(get_current_user)],
+    estimate_id: int,
+    session: Session = Depends(get_session)
+):
+    """Отменяет смету, которая находится в статусе IN_PROGRESS: возвращает товары на основной склад
+    и переводит статус сметы в CANCELLED. Записывает соответствующие движения в историю.
+    """
+    estimate = get_db_object_or_404(Estimate, estimate_id, session)
+
+    if estimate.status != EstimateStatusEnum.IN_PROGRESS:
+        raise HTTPException(status_code=400, detail="Можно отменить только смету в статусе 'В работе'.")
+
+    if not estimate.worker_id:
+        raise HTTPException(status_code=400, detail="Не найден работник, на которого была отгружена смета. Отмена невозможна.")
+
+    # Возвращаем товары со сметы обратно на основной склад и создаём движения возврата
+    for item in estimate.items:
+        product = get_db_object_or_404(Product, item.product_id, session)
+        product.stock_quantity += item.quantity
+        movement = StockMovement(
+            product_id=item.product_id,
+            worker_id=estimate.worker_id,
+            quantity=item.quantity,
+            type=MovementTypeEnum.RETURN_FROM_WORKER,
+            stock_after=product.stock_quantity
+        )
+        session.add(product)
+        session.add(movement)
+
+    estimate.status = EstimateStatusEnum.CANCELLED
+    session.add(estimate)
+    session.commit()
+
+    return {"message": f"Смета №{estimate.estimate_number} отменена и товары возвращены на склад."}
+
+
+@app.post("/estimates/{estimate_id}/reopen", summary="Вернуть отмененную смету в работу и отдать товары работнику", tags=["Сметы"])
+def reopen_cancelled_estimate(
+    current_user: Annotated[dict, Depends(get_current_user)],
+    estimate_id: int,
+    worker_id: int = Query(...),
+    session: Session = Depends(get_session)
+):
+    """Восстанавливает отменённую смету: переводит статус в IN_PROGRESS и повторно выдает
+    товары работнику (списание со склада). Требует указания worker_id."""
+    estimate = get_db_object_or_404(Estimate, estimate_id, session)
+
+    if estimate.status != EstimateStatusEnum.CANCELLED:
+        raise HTTPException(status_code=400, detail="Можно восстановить только отменённую смету.")
+
+    worker = get_db_object_or_404(Worker, worker_id, session)
+
+    # Попробуем списать товары со склада заново
+    for item in estimate.items:
+        product = get_db_object_or_404(Product, item.product_id, session)
+        if product.stock_quantity < item.quantity:
+            raise HTTPException(status_code=400, detail=f"Недостаточно товара на складе: {product.name}")
+        product.stock_quantity -= item.quantity
+        movement = StockMovement(product_id=item.product_id, worker_id=worker.id, quantity=-item.quantity,
+                                 type=MovementTypeEnum.ISSUE_TO_WORKER, stock_after=product.stock_quantity)
+        session.add(product)
+        session.add(movement)
+
+    estimate.status = EstimateStatusEnum.IN_PROGRESS
+    estimate.worker_id = worker.id
+    estimate.shipped_at = datetime.utcnow()
+    session.add(estimate)
+    session.commit()
+
+    return {"message": f"Смета №{estimate.estimate_number} возвращена в работу и отгружена работнику {worker.name}."}
 
 # --- Эндпоинты для Договоров (Contracts) ---
 
@@ -1926,6 +2105,82 @@ def get_profit_report(
     )
 
 
+class ProfitDetailItem(BaseModel):
+    product_id: int
+    product_name: str
+    unit: Optional[str] = None
+    quantity: float
+    unit_price: float
+    purchase_price: Optional[float] = None
+    total_retail: Optional[float] = None
+    total_purchase: Optional[float] = None
+    difference: Optional[float] = None
+
+
+class ProfitDetailResponse(BaseModel):
+    estimate_id: int
+    items: List[ProfitDetailItem]
+    total_retail: float
+    total_purchase: float
+    total_profit: float
+
+
+@app.get("/reports/profit/{estimate_id}/details", response_model=ProfitDetailResponse, summary="Детали по смете (позиций)", tags=["Отчеты"])
+def get_profit_report_details(
+    current_user: Annotated[dict, Depends(get_current_user)],
+    estimate_id: int,
+    session: Session = Depends(get_session)
+):
+    # Return detailed lines for a single estimate: retail/purchase per position and totals.
+    estimate = get_db_object_or_404(Estimate, estimate_id, session)
+
+    # Load products used in the estimate in one query
+    product_ids = [it.product_id for it in estimate.items]
+    products = []
+    if product_ids:
+        products = session.exec(select(Product).where(Product.id.in_(product_ids))).all()
+    product_map = {p.id: p for p in products}
+
+    items: List[ProfitDetailItem] = []
+    total_retail = 0.0
+    total_purchase = 0.0
+
+    for it in estimate.items:
+        product = product_map.get(it.product_id)
+        purchase_price = float(product.purchase_price) if product and product.purchase_price is not None else 0.0
+        unit_price = float(it.unit_price or 0.0)
+        quantity = float(it.quantity or 0.0)
+
+        total_r = round(unit_price * quantity, 2) if quantity else 0.0
+        total_p = round(purchase_price * quantity, 2) if quantity else 0.0
+        diff = round(total_r - total_p, 2)
+
+        total_retail += total_r
+        total_purchase += total_p
+
+        unit_value = None
+        try:
+            if product and getattr(product, 'unit', None):
+                unit_value = product.unit.value
+        except Exception:
+            unit_value = None
+
+        items.append(ProfitDetailItem(
+            product_id=it.product_id,
+            product_name=product.name if product else str(it.product_id),
+            unit=unit_value,
+            quantity=quantity,
+            unit_price=unit_price,
+            purchase_price=purchase_price,
+            total_retail=total_r,
+            total_purchase=total_p,
+            difference=diff
+        ))
+
+    total_profit = round(total_retail - total_purchase, 2)
+    return ProfitDetailResponse(estimate_id=estimate_id, items=items, total_retail=round(total_retail, 2), total_purchase=round(total_purchase, 2), total_profit=total_profit)
+
+
 class DrillingProfitItem(BaseModel):
     contract_id: int
     contract_number: str
@@ -2044,9 +2299,45 @@ def get_dashboard_summary(current_user: Annotated[dict, Depends(get_current_user
                 total_profit += (item.quantity * item.unit_price) - \
                     (item.quantity * (product.purchase_price or 0))
 
+    # --- Вычисление прибыли по бурению за последние 30 дней ---
+    drilling_query = select(Contract).where(
+        Contract.contract_type == ContractTypeEnum.DRILLING,
+        Contract.status == ContractStatusEnum.COMPLETED,
+        Contract.contract_date >= thirty_days_ago
+    )
+    drilling_contracts = session.exec(drilling_query).all()
+    drilling_total = 0.0
+    for c in drilling_contracts:
+        price_soil = c.price_per_meter_soil or 0.0
+        price_rock = c.price_per_meter_rock or 0.0
+        meters_soil = float(c.actual_depth_soil or 0.0)
+        meters_rock = float(c.actual_depth_rock or 0.0)
+        drilling_retail = price_soil * meters_soil + price_rock * meters_rock
+
+        steel_m = float(c.pipe_steel_used or 0.0)
+        plastic_m = float(c.pipe_plastic_used or 0.0)
+        steel_prod = session.exec(select(Product).where(
+            Product.internal_sku == 'PIPE_STEEL_133_ST20')).first()
+        plastic_prod = session.exec(select(Product).where(
+            Product.internal_sku == 'PIPE_PLASTIC_110_6_1')).first()
+        steel_purchase = float(
+            steel_prod.purchase_price) if steel_prod and steel_prod.purchase_price is not None else 0.0
+        steel_retail = float(
+            steel_prod.retail_price) if steel_prod and steel_prod.retail_price is not None else 0.0
+        plastic_purchase = float(
+            plastic_prod.purchase_price) if plastic_prod and plastic_prod.purchase_price is not None else 0.0
+        plastic_retail = float(
+            plastic_prod.retail_price) if plastic_prod and plastic_prod.retail_price is not None else 0.0
+        pipe_purchase = steel_purchase * steel_m + plastic_purchase * plastic_m
+        pipe_retail = steel_retail * steel_m + plastic_retail * plastic_m
+
+        profit = (drilling_retail + pipe_retail) - (pipe_purchase)
+        drilling_total += profit
+
     return DashboardSummary(
         products_to_order_count=products_to_order_count,
         estimates_in_progress_count=estimates_in_progress_count,
         contracts_in_progress_count=contracts_in_progress_count,
-        profit_last_30_days=total_profit
+        profit_last_30_days=total_profit,
+        drilling_profit_last_30_days=round(drilling_total, 2)
     )

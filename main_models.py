@@ -153,6 +153,8 @@ class Contract(SQLModel, table=True):
     actual_depth_rock: Optional[float] = None
     pipe_steel_used: Optional[float] = None
     pipe_plastic_used: Optional[float] = None
+    # Optional explicit price per meter for steel pipe; if not provided, code may fallback to Product.retail_price or default
+    pipe_steel_price_per_meter: Optional[float] = None
     # Минимальная сумма для бурения (может быть переопределена на уровне договора)
     min_price: Optional[float] = None
     status: ContractStatusEnum = Field(default=ContractStatusEnum.PLANNED)

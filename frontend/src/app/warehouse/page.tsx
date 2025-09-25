@@ -33,6 +33,7 @@ export default function WarehousePage() {
 
   const [isProductModalOpen, setIsProductModalOpen] = useState(false);
   const [isIssueModalOpen, setIsIssueModalOpen] = useState(false);
+  const [isReceiveModalOpen, setIsReceiveModalOpen] = useState(false);
 
   const [editingProduct, setEditingProduct] = useState<Product | null>(null);
 
@@ -40,6 +41,9 @@ export default function WarehousePage() {
   const [issueQuantity, setIssueQuantity] = useState(1);
   const [issueWorkerId, setIssueWorkerId] = useState('');
   const [workers, setWorkers] = useState<Worker[]>([]);
+  const [receiveProductSearch, setReceiveProductSearch] = useState('');
+  const [receiveSelectedProduct, setReceiveSelectedProduct] = useState<Product | null>(null);
+  const [receiveQuantity, setReceiveQuantity] = useState<number>(1);
 
   const [searchTerm, setSearchTerm] = useState('');
   const [currentPage, setCurrentPage] = useState(1);
@@ -314,6 +318,9 @@ export default function WarehousePage() {
             <button onClick={() => supplierImportInputRef.current?.click()} className="flex items-center gap-2 px-4 py-2 bg-indigo-500 text-white rounded-md hover:bg-indigo-600">
               <Upload size={18} /> Пополнить
             </button>
+            <button onClick={() => setIsReceiveModalOpen(true)} className="flex items-center gap-2 px-4 py-2 bg-yellow-500 text-white rounded-md hover:bg-yellow-600">
+              <Plus size={18} /> Приход
+            </button>
             <button onClick={openCreateModal} className="flex items-center gap-2 px-4 py-2 bg-green-500 text-white rounded-md hover:bg-green-600 transition-colors">
               <Plus size={18} /> Добавить товар
             </button>
@@ -473,6 +480,61 @@ export default function WarehousePage() {
             <div className="col-span-2 flex justify-end pt-4">
               <button type="button" onClick={() => setIsProductModalOpen(false)} className="px-4 py-2 bg-gray-200 rounded-md mr-2 hover:bg-gray-300">Отмена</button>
               <button type="submit" className="px-4 py-2 bg-blue-500 text-white rounded-md hover:bg-blue-600">Сохранить</button>
+            </div>
+          </form>
+        </Modal>
+      )}
+
+      {isReceiveModalOpen && (
+        <Modal isOpen={isReceiveModalOpen} onClose={() => setIsReceiveModalOpen(false)} title="Приход товара на склад">
+          <form className="space-y-4" onSubmit={async (e) => {
+            e.preventDefault();
+            if (!receiveSelectedProduct || receiveQuantity <= 0) { toast.error('Выберите товар и укажите количество'); return; }
+            const toastId = toast.loading('Создаём приход...');
+            try {
+              const payload = { product_id: receiveSelectedProduct.id, quantity: Number(receiveQuantity) };
+              const movement = await fetchApi('/actions/receive-item/', { method: 'POST', body: JSON.stringify(payload) });
+              toast.success('Приход создан', { id: toastId });
+              setIsReceiveModalOpen(false);
+              setReceiveSelectedProduct(null);
+              setReceiveQuantity(1);
+              forceRefresh();
+            } catch (err: any) { toast.error(`Ошибка: ${err.message}`); }
+          }}>
+            <div>
+              <label className="block text-sm font-medium text-gray-700">Поиск товара</label>
+              <input type="search" value={receiveProductSearch} onChange={(e) => setReceiveProductSearch(e.target.value)} placeholder="Введите название или артикул..." className="mt-1 block w-full border rounded-md p-2" />
+              <div className="max-h-40 overflow-y-auto mt-2 border rounded">
+                {(products.filter(p => {
+                  if (!receiveProductSearch) return true;
+                  const s = receiveProductSearch.toLowerCase();
+                  return p.name.toLowerCase().includes(s) || (p.internal_sku || '').toLowerCase().includes(s) || (p.supplier_sku || '').toLowerCase().includes(s);
+                })).slice(0, 50).map(p => (
+                  <div key={p.id} onClick={() => { setReceiveSelectedProduct(p); setReceiveProductSearch(p.name); }} className={`p-2 cursor-pointer ${receiveSelectedProduct?.id === p.id ? 'bg-gray-100' : 'hover:bg-gray-50'}`}>
+                    <div className="font-medium">{p.name}</div>
+                    <div className="text-xs text-gray-500">{p.internal_sku} — {p.stock_quantity} {p.unit}</div>
+                  </div>
+                ))}
+              </div>
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-gray-700">Выбранный товар</label>
+              <div className="mt-1 p-2 border rounded">
+                {receiveSelectedProduct ? (
+                  <div>
+                    <div className="font-semibold">{receiveSelectedProduct.name}</div>
+                    <div className="text-sm text-gray-500">Остаток: {receiveSelectedProduct.stock_quantity} {receiveSelectedProduct.unit}</div>
+                  </div>
+                ) : <div className="text-sm text-gray-500">Товар не выбран</div>}
+              </div>
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-gray-700">Количество</label>
+              <input type="number" min="0.01" step="0.01" value={receiveQuantity} onChange={(e) => setReceiveQuantity(Number(e.target.value))} className="mt-1 block w-full border rounded-md p-2" />
+            </div>
+            <div className="flex justify-end pt-4 border-t">
+              <button type="button" onClick={() => setIsReceiveModalOpen(false)} className="px-4 py-2 bg-gray-200 rounded-md mr-2">Отмена</button>
+              <button type="submit" className="px-4 py-2 bg-yellow-500 text-white rounded-md">Создать приход</button>
             </div>
           </form>
         </Modal>

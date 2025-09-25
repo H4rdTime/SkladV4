@@ -18,14 +18,30 @@ interface Movement {
 export default function HistoryPage() {
     const [history, setHistory] = useState<Movement[]>([]);
     const [isLoading, setIsLoading] = useState(true);
+    const [search, setSearch] = useState('');
+    const [page, setPage] = useState(1);
+    const [size, setSize] = useState(50);
+    const [total, setTotal] = useState(0);
+    const [startDate, setStartDate] = useState<string | null>(null);
+    const [endDate, setEndDate] = useState<string | null>(null);
+    const [movementType, setMovementType] = useState<string | null>(null);
 
     // API_URL больше не нужен, используем fetchApi
 
-    const fetchHistory = async () => {
+    const fetchHistory = async (q?: string) => {
         setIsLoading(true);
         try {
-            const data = await fetchApi('/actions/history/');
-            setHistory(data);
+            const params = new URLSearchParams();
+            if (q) params.append('search', q);
+            if (startDate) params.append('start_date', startDate);
+            if (endDate) params.append('end_date', endDate);
+            if (movementType) params.append('movement_type', movementType);
+            params.append('page', String(page));
+            params.append('size', String(size));
+            const url = `/actions/history/?${params.toString()}`;
+            const data = await fetchApi(url);
+            setHistory(data.items || []);
+            setTotal(data.total || 0);
         } catch (error) {
             console.error(error);
         } finally {
@@ -34,8 +50,14 @@ export default function HistoryPage() {
     };
 
     useEffect(() => {
-        fetchHistory();
-    }, []);
+        const t = setTimeout(() => { setPage(1); fetchHistory(search.trim()); }, 300);
+        return () => clearTimeout(t);
+    }, [search, startDate, endDate, movementType, size]);
+
+    useEffect(() => {
+        // fetch when page changes
+        fetchHistory(search.trim());
+    }, [page]);
 
     const handleCancelMovement = async (movementId: number) => {
         if (confirm('Вы уверены, что хотите отменить эту операцию? Будет создана обратная, корректирующая запись в истории.')) {
@@ -56,6 +78,26 @@ export default function HistoryPage() {
         <main className="container mx-auto p-4 sm:p-6 lg:p-8">
             <h1 className="text-3xl font-bold text-gray-800 mb-6">История движений</h1>
             <div className="bg-white rounded-lg shadow-md overflow-hidden">
+                <div className="p-4 border-b flex flex-col sm:flex-row sm:items-center sm:space-x-3 gap-2">
+                    <input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Поиск по товару или работнику..." className="w-full sm:w-1/3 p-2 border rounded-md" />
+                    <div className="flex items-center space-x-2">
+                        <input type="date" value={startDate || ''} onChange={(e) => setStartDate(e.target.value || null)} className="p-2 border rounded-md" />
+                        <input type="date" value={endDate || ''} onChange={(e) => setEndDate(e.target.value || null)} className="p-2 border rounded-md" />
+                        <select value={movementType || ''} onChange={(e) => setMovementType(e.target.value || null)} className="p-2 border rounded-md">
+                            <option value="">Все типы</option>
+                            <option value="INCOME">Приход</option>
+                            <option value="ISSUE_TO_WORKER">Выдача</option>
+                            <option value="RETURN_FROM_WORKER">Возврат</option>
+                            <option value="WRITE_OFF_ESTIMATE">Списание (смета)</option>
+                            <option value="WRITE_OFF_CONTRACT">Списание (договор)</option>
+                        </select>
+                        <select value={String(size)} onChange={(e) => setSize(Number(e.target.value))} className="p-2 border rounded-md">
+                            <option value={25}>25</option>
+                            <option value={50}>50</option>
+                            <option value={100}>100</option>
+                        </select>
+                    </div>
+                </div>
                 <div className="overflow-x-auto">
                     <table className="min-w-full text-sm">
                         <thead className="bg-gray-100 border-b-2 border-gray-200">
@@ -70,7 +112,7 @@ export default function HistoryPage() {
                         </thead>
                         <tbody className="divide-y divide-gray-200">
                             {isLoading ? (
-                                <tr><td colSpan={6} className="text-center py-10 text-gray-500">Загрузка...</td></tr>
+                                <tr><td colSpan={7} className="text-center py-10 text-gray-500">Загрузка...</td></tr>
                             ) : (
                                 history.map(m => (
                                     <tr key={m.id} className={`hover:bg-gray-50 transition-colors ${!isCancelable(m.type) ? 'bg-gray-100 text-gray-500' : ''}`}>
@@ -100,6 +142,13 @@ export default function HistoryPage() {
                             )}
                         </tbody>
                     </table>
+                </div>
+                <div className="p-4 flex items-center justify-between">
+                    <div>Показано: {total === 0 ? 0 : (page-1)*size + 1} - {Math.min(page*size, total)} из {total}</div>
+                    <div className="space-x-2">
+                        <button disabled={page <= 1} onClick={() => setPage(p => Math.max(1, p-1))} className="px-3 py-1 border rounded">Пред.</button>
+                        <button disabled={(page*size) >= total} onClick={() => setPage(p => p+1)} className="px-3 py-1 border rounded">След.</button>
+                    </div>
                 </div>
             </div>
         </main>

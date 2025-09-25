@@ -28,6 +28,7 @@ interface Contract {
     actual_depth_rock: number | null;
     pipe_steel_used: number | null;
     pipe_plastic_used: number | null;
+    pipe_steel_price_per_meter?: number | null;
     status: string;
     contract_type: string;
 }
@@ -59,6 +60,18 @@ export default function ContractForm({ contractId }: ContractFormProps) {
             const data = await fetchApi(`/contracts/${contractId}`);
             setFormData(data);
             if (data.status === 'Завершен') setIsEditing(false);
+            // If steel pipe price is not set on the contract, try to fetch from product SKU or fallback to 1500
+            if (data && (data.pipe_steel_price_per_meter === undefined || data.pipe_steel_price_per_meter === null)) {
+                try {
+                    const prod = await fetchApi(`/products/?internal_sku=PIPE_STEEL_133_ST20`);
+                    let priceFromProduct = null;
+                    if (Array.isArray(prod) && prod.length > 0) priceFromProduct = prod[0].retail_price;
+                    else if (prod && prod.retail_price) priceFromProduct = prod.retail_price;
+                    setFormData(prev => ({ ...prev, pipe_steel_price_per_meter: priceFromProduct ?? 1500 }));
+                } catch (e) {
+                    setFormData(prev => ({ ...prev, pipe_steel_price_per_meter: 1500 }));
+                }
+            }
         } catch (error: any) {
             toast.error(error.message);
             router.push('/contracts');
@@ -73,7 +86,8 @@ export default function ContractForm({ contractId }: ContractFormProps) {
 
     const numericFields = new Set([
         'estimated_depth', 'price_per_meter_soil', 'price_per_meter_rock', 'min_price',
-        'actual_depth_soil', 'actual_depth_rock', 'pipe_steel_used', 'pipe_plastic_used'
+    'actual_depth_soil', 'actual_depth_rock', 'pipe_steel_used', 'pipe_plastic_used',
+    'pipe_steel_price_per_meter'
     ]);
 
     const handleChange = (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>) => {
@@ -338,6 +352,7 @@ export default function ContractForm({ contractId }: ContractFormProps) {
                                 <input type="number" step="0.1" name="actual_depth_rock" value={formData.actual_depth_rock ?? ''} onChange={handleChange} placeholder="Факт (по скале), м" className="border p-2 rounded-md" />
                                 <input type="number" step="0.1" name="pipe_steel_used" value={formData.pipe_steel_used ?? ''} onChange={handleChange} placeholder="Исп. сталь, м" className="border p-2 rounded-md" />
                                 <input type="number" step="0.1" name="pipe_plastic_used" value={formData.pipe_plastic_used ?? ''} onChange={handleChange} placeholder="Исп. пластик, м" className="border p-2 rounded-md" />
+                                <input type="number" step="0.01" name="pipe_steel_price_per_meter" value={formData.pipe_steel_price_per_meter ?? ''} onChange={handleChange} placeholder="Цена сталь трубы, ₽/м (по умолчанию 1500)" className="border p-2 rounded-md" />
                             </div>
                         </fieldset>
 
@@ -363,6 +378,10 @@ export default function ContractForm({ contractId }: ContractFormProps) {
                         </div>
                         <div className="flex space-x-2">
                             <button onClick={() => setIsEditing(true)} className="p-2 bg-gray-200 rounded-md hover:bg-gray-300" title="Редактировать"><Edit size={18} /></button>
+                            {/* Show write-off button in view mode as well (only when not already completed) */}
+                            {formData.status !== 'Завершен' && (
+                                <button onClick={handleWriteOffPipes} className="p-2 bg-orange-500 text-white rounded-md hover:bg-orange-600" title="Списать и завершить">Списать и Завершить</button>
+                            )}
                             <button onClick={handleDownloadDocx} className="p-2 bg-teal-500 text-white rounded-md hover:bg-teal-600" title="Скачать .docx"><Download size={18} /></button>
                         </div>
                     </div>

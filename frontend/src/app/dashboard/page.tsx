@@ -12,15 +12,16 @@ interface DashboardData {
     estimates_in_progress_count: number;
     contracts_in_progress_count: number;
     profit_last_30_days: number;
+    drilling_profit_last_30_days: number;
 }
 
 const StatCard = ({ title, value, icon: Icon, link, color }: { title: string, value: string | number, icon: React.ElementType, link: string, color: string }) => (
-    <Link href={link} className="block p-6 bg-white rounded-lg shadow-md hover:shadow-lg transition-shadow border-l-4" style={{ borderColor: color }}>
+    <Link href={link} className="inline-flex items-center p-4 bg-white rounded-lg shadow-md hover:shadow-lg transition-shadow border-l-4" style={{ borderColor: color }}>
         <div className="flex items-center">
-            <div className="p-3 rounded-full mr-4" style={{ backgroundColor: `${color}1A` }}>
+            <div className="p-3 rounded-full mr-4 flex-shrink-0" style={{ backgroundColor: `${color}1A` }}>
                 <Icon style={{ color: color }} size={24} />
             </div>
-            <div>
+            <div className="whitespace-nowrap">
                 <p className="text-sm font-medium text-gray-500">{title}</p>
                 <p className="text-2xl font-bold text-gray-800">{value}</p>
             </div>
@@ -55,7 +56,7 @@ export default function DashboardPage() {
         <main className="container mx-auto p-4 sm:p-6 lg:p-8">
             <h1 className="text-3xl font-bold text-gray-800 mb-6">Сводная панель</h1>
 
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
+            <div className="gap-6" style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(300px, max-content))' }}>
                 <StatCard
                     title="Товары к закупке"
                     value={data?.products_to_order_count || 0}
@@ -86,7 +87,7 @@ export default function DashboardPage() {
                 />
                     <StatCard
                         title="Прибыль по бурению (30д)"
-                        value={`${(data?.profit_last_30_days || 0).toFixed(0)} ₽`}
+                        value={`${(data?.drilling_profit_last_30_days || 0).toFixed(0)} ₽`}
                         icon={DollarSign}
                         link="/reports/drilling"
                         color="#06b6d4" // teal-500

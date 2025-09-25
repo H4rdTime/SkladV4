@@ -2,7 +2,7 @@
 'use client';
 import Link from 'next/link';
 import toast from 'react-hot-toast';
-import { Warehouse, Users, FileText, BookUser, Trash2, History, ClipboardList, LayoutDashboard, X, Menu, LineChart, Hammer } from 'lucide-react'; // Добавил иконки
+import { Warehouse, Users, FileText, BookUser, Trash2, History, ClipboardList, LayoutDashboard, X, Menu, LineChart, Hammer, ShoppingCart } from 'lucide-react'; // Добавил иконки
 import { useState } from 'react';
 
 const NavLink = ({ href, children, onClose }: { href: string, children: React.ReactNode, onClose: () => void }) => {
@@ -68,6 +68,10 @@ export default function ProtectedLayout({ children }: { children: React.ReactNod
                     <NavLink href="/contracts" onClose={() => setIsMobileMenuOpen(false)}>
                         <BookUser size={20} />
                         <span>Договоры</span>
+                    </NavLink>
+                    <NavLink href="/products-to-order" onClose={() => setIsMobileMenuOpen(false)}>
+                        <ShoppingCart size={20} />
+                        <span>Товары к закупу</span>
                     </NavLink>
                     <NavLink href="/history" onClose={() => setIsMobileMenuOpen(false)}>
                         <History size={20} />
