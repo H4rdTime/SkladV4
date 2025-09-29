@@ -337,6 +337,8 @@ class ContractUpdate(BaseModel):
     location: Optional[str] = None
     passport_series_number: Optional[str] = None
     passport_issued_by: Optional[str] = None
+    # Allow updating contract_date from frontend (ISO date string like 'YYYY-MM-DD')
+    contract_date: Optional[str] = None
     passport_issue_date: Optional[str] = None
     passport_dep_code: Optional[str] = None
     passport_address: Optional[str] = None
