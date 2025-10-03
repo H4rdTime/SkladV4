@@ -20,6 +20,7 @@ from fastapi import (
     FastAPI, Depends, Form, HTTPException, UploadFile,
     File, Query, BackgroundTasks
 )
+import math
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
@@ -1215,12 +1216,26 @@ def read_estimate(current_user: Annotated[dict, Depends(get_current_user)], esti
     if not estimate:
         raise HTTPException(status_code=404, detail="Смета не найдена")
     response_items = []
-    total_sum = sum(item.quantity * item.unit_price for item in estimate.items)
+    # compute total_sum carefully and sanitize NaN/inf
+    raw_total = 0.0
     for item in estimate.items:
+        q = float(item.quantity or 0.0)
+        p = float(item.unit_price or 0.0)
+        # sanitize q and p to valid JSON numbers
+        if math.isnan(q) or math.isinf(q):
+            q = 0.0
+        if math.isnan(p) or math.isinf(p):
+            p = 0.0
+        raw_total += q * p
         response_items.append(EstimateItemResponse(
-            id=item.id, quantity=item.quantity, unit_price=item.unit_price, product_id=item.product_id,
+            id=item.id,
+            quantity=q,
+            unit_price=p,
+            product_id=item.product_id,
             product_name=item.product.name if item.product and not item.product.is_deleted else "Товар удален"
         ))
+
+    total_sum = raw_total if not (math.isnan(raw_total) or math.isinf(raw_total)) else 0.0
     return EstimateResponse(**estimate.model_dump(), items=response_items, total_sum=total_sum)
 
 
