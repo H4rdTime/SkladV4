@@ -2277,9 +2277,10 @@ def get_drilling_profit_report(
     return DrillingProfitResponse(items=items, grand_total_profit=round(grand_profit, 2))
 
 
+# --- Исправленная функция get_dashboard_summary ---
 @app.get("/dashboard/summary", response_model=DashboardSummary, summary="Сводка для дашборда", tags=["Дашборд"])
 def get_dashboard_summary(current_user: Annotated[dict, Depends(get_current_user)], session: Session = Depends(get_session)):
-    # Count products that are considered 'low stock' (include zero quantity)
+    # 1. Считаем количество товаров
     products_to_order_count = session.exec(
         select(func.count(Product.id)).where(
             Product.is_deleted == False,
@@ -2287,74 +2288,96 @@ def get_dashboard_summary(current_user: Annotated[dict, Depends(get_current_user
             Product.stock_quantity <= Product.min_stock_level
         )
     ).one()
+    
     estimates_in_progress_count = session.exec(select(func.count(Estimate.id)).where(
         Estimate.status == EstimateStatusEnum.IN_PROGRESS
     )).one()
+    
     contracts_in_progress_count = session.exec(select(func.count(Contract.id)).where(
         Contract.status == ContractStatusEnum.IN_PROGRESS
     )).one()
 
+    # 2. Считаем прибыль по сметам за 30 дней
     thirty_days_ago = datetime.now(timezone.utc) - timedelta(days=30)
     profit_estimates = session.exec(select(Estimate).options(selectinload(Estimate.items)).where(
         Estimate.status == EstimateStatusEnum.COMPLETED,
         Estimate.created_at >= thirty_days_ago
     )).all()
 
-    # --- ТАКАЯ ЖЕ РУЧНАЯ ЗАГРУЗКА ТОВАРОВ ---
-    product_ids = {
-        item.product_id for est in profit_estimates for item in est.items}
-    products_list = session.exec(
-        select(Product).where(Product.id.in_(product_ids))).all()
+    product_ids = {item.product_id for est in profit_estimates for item in est.items}
+    products_list = []
+    if product_ids:
+        products_list = session.exec(select(Product).where(Product.id.in_(product_ids))).all()
     product_map = {p.id: p for p in products_list}
-    # ----------------------------------------
 
-    total_profit = 0
+    total_profit = 0.0
     for est in profit_estimates:
         for item in est.items:
             product = product_map.get(item.product_id)
             if product:
-                total_profit += (item.quantity * item.unit_price) - \
-                    (item.quantity * (product.purchase_price or 0))
+                # Защита от None и NaN
+                qty = float(item.quantity or 0)
+                price = float(item.unit_price or 0)
+                cost = float(product.purchase_price or 0)
+                
+                item_profit = (qty * price) - (qty * cost)
+                
+                # Если вдруг получился NaN (например 0 * inf), заменяем на 0
+                if math.isnan(item_profit) or math.isinf(item_profit):
+                    item_profit = 0.0
+                
+                total_profit += item_profit
 
-    # --- Вычисление прибыли по бурению за последние 30 дней ---
+    # 3. Считаем прибыль по бурению за 30 дней
     drilling_query = select(Contract).where(
         Contract.contract_type == ContractTypeEnum.DRILLING,
         Contract.status == ContractStatusEnum.COMPLETED,
         Contract.contract_date >= thirty_days_ago
     )
     drilling_contracts = session.exec(drilling_query).all()
+    
     drilling_total = 0.0
+    
+    # Подгружаем цены на трубы один раз (чтобы не дергать базу в цикле)
+    steel_prod = session.exec(select(Product).where(Product.internal_sku == 'PIPE_STEEL_133_ST20')).first()
+    plastic_prod = session.exec(select(Product).where(Product.internal_sku == 'PIPE_PLASTIC_110_6_1')).first()
+    
+    steel_purchase = float(steel_prod.purchase_price) if steel_prod and steel_prod.purchase_price is not None else 0.0
+    steel_retail = float(steel_prod.retail_price) if steel_prod and steel_prod.retail_price is not None else 0.0
+    
+    plastic_purchase = float(plastic_prod.purchase_price) if plastic_prod and plastic_prod.purchase_price is not None else 0.0
+    plastic_retail = float(plastic_prod.retail_price) if plastic_prod and plastic_prod.retail_price is not None else 0.0
+
     for c in drilling_contracts:
-        price_soil = c.price_per_meter_soil or 0.0
-        price_rock = c.price_per_meter_rock or 0.0
+        price_soil = float(c.price_per_meter_soil or 0.0)
+        price_rock = float(c.price_per_meter_rock or 0.0)
         meters_soil = float(c.actual_depth_soil or 0.0)
         meters_rock = float(c.actual_depth_rock or 0.0)
+        
         drilling_retail = price_soil * meters_soil + price_rock * meters_rock
 
         steel_m = float(c.pipe_steel_used or 0.0)
         plastic_m = float(c.pipe_plastic_used or 0.0)
-        steel_prod = session.exec(select(Product).where(
-            Product.internal_sku == 'PIPE_STEEL_133_ST20')).first()
-        plastic_prod = session.exec(select(Product).where(
-            Product.internal_sku == 'PIPE_PLASTIC_110_6_1')).first()
-        steel_purchase = float(
-            steel_prod.purchase_price) if steel_prod and steel_prod.purchase_price is not None else 0.0
-        steel_retail = float(
-            steel_prod.retail_price) if steel_prod and steel_prod.retail_price is not None else 0.0
-        plastic_purchase = float(
-            plastic_prod.purchase_price) if plastic_prod and plastic_prod.purchase_price is not None else 0.0
-        plastic_retail = float(
-            plastic_prod.retail_price) if plastic_prod and plastic_prod.retail_price is not None else 0.0
+
         pipe_purchase = steel_purchase * steel_m + plastic_purchase * plastic_m
         pipe_retail = steel_retail * steel_m + plastic_retail * plastic_m
 
         profit = (drilling_retail + pipe_retail) - (pipe_purchase)
+        
+        # ГЛАВНОЕ ИСПРАВЛЕНИЕ: Проверка на NaN перед добавлением к общей сумме
+        if math.isnan(profit) or math.isinf(profit):
+            profit = 0.0
+            
         drilling_total += profit
+
+    # Финальная проверка перед возвратом (на всякий случай)
+    if math.isnan(total_profit): total_profit = 0.0
+    if math.isnan(drilling_total): drilling_total = 0.0
 
     return DashboardSummary(
         products_to_order_count=products_to_order_count,
         estimates_in_progress_count=estimates_in_progress_count,
         contracts_in_progress_count=contracts_in_progress_count,
-        profit_last_30_days=total_profit,
+        profit_last_30_days=round(total_profit, 2),
         drilling_profit_last_30_days=round(drilling_total, 2)
     )
