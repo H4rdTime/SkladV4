@@ -22,7 +22,7 @@ from fastapi import (
 )
 import math
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, Response
 from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
 from fuzzywuzzy import process as fuzzy_process
 from jose import JWTError, jwt
@@ -636,14 +636,25 @@ def delete_worker(current_user: Annotated[dict, Depends(get_current_user)], work
     return None
 
 
+# --- Вспомогательные функции ---
+def validate_quantity(qty: float) -> float:
+    if math.isnan(qty) or math.isinf(qty):
+        raise HTTPException(status_code=400, detail="Количество не может быть NaN или бесконечностью.")
+    if qty <= 0:
+        raise HTTPException(status_code=400, detail="Количество должно быть > 0")
+    return qty
+
 # --- Эндпоинты для Операций (Actions) ---
 @app.post("/actions/issue-item/", response_model=StockMovement, summary="Выдать товар работнику", tags=["Операции"])
 def issue_item_to_worker(current_user: Annotated[dict, Depends(get_current_user)], request: IssueItemRequest, session: Session = Depends(get_session)):
+    validate_quantity(request.quantity)
     product = get_db_object_or_404(Product, request.product_id, session)
     worker = get_db_object_or_404(Worker, request.worker_id, session)
-    if request.quantity <= 0:
-        raise HTTPException(
-            status_code=400, detail="Количество должно быть > 0")
+    
+    # Ensure product stock is valid
+    if math.isnan(product.stock_quantity):
+        product.stock_quantity = 0.0
+
     if product.stock_quantity < request.quantity:
         raise HTTPException(
             status_code=400, detail=f"Недостаточно товара. В наличии: {product.stock_quantity}")
@@ -664,13 +675,13 @@ def issue_item_to_worker(current_user: Annotated[dict, Depends(get_current_user)
 @app.post("/actions/receive-item/", response_model=StockMovement, summary="Принять товар на склад (приход)", tags=["Операции"])
 def receive_item_on_stock(current_user: Annotated[dict, Depends(get_current_user)], request: ReceiveItemRequest, session: Session = Depends(get_session)):
     """Увеличивает остаток товара и создаёт движение типа INCOME."""
+    validate_quantity(request.quantity)
     product = get_db_object_or_404(Product, request.product_id, session)
-    if request.quantity <= 0:
-        raise HTTPException(
-            status_code=400, detail="Количество должно быть > 0")
 
     # Обновляем остаток
-    product.stock_quantity = (product.stock_quantity or 0) + request.quantity
+    current_stock = product.stock_quantity if not math.isnan(product.stock_quantity) else 0.0
+    product.stock_quantity = current_stock + request.quantity
+    
     movement = StockMovement(
         product_id=request.product_id,
         quantity=request.quantity,
@@ -686,13 +697,13 @@ def receive_item_on_stock(current_user: Annotated[dict, Depends(get_current_user
 
 @app.post("/actions/return-item/", response_model=StockMovement, summary="Принять возврат от работника", tags=["Операции"])
 def return_item_from_worker(current_user: Annotated[dict, Depends(get_current_user)], request: ReturnItemRequest, session: Session = Depends(get_session)):
+    validate_quantity(request.quantity)
     product = get_db_object_or_404(Product, request.product_id, session)
     worker = get_db_object_or_404(Worker, request.worker_id, session)
-    if request.quantity <= 0:
-        raise HTTPException(
-            status_code=400, detail="Количество должно быть > 0")
 
-    product.stock_quantity += request.quantity
+    current_stock = product.stock_quantity if not math.isnan(product.stock_quantity) else 0.0
+    product.stock_quantity = current_stock + request.quantity
+    
     movement = StockMovement(
         product_id=request.product_id, worker_id=request.worker_id,
         quantity=request.quantity, type=MovementTypeEnum.RETURN_FROM_WORKER,
@@ -716,6 +727,10 @@ def get_worker_stock(current_user: Annotated[dict, Depends(get_current_user)], w
     )).all()
     worker_stock = []
     for product_id, product_name, unit, total_quantity in results:
+        # Check for None or NaN in total_quantity
+        if total_quantity is None or math.isnan(total_quantity):
+            total_quantity = 0.0
+            
         quantity_on_hand = -total_quantity
         if quantity_on_hand > 0.001:  # Порог для чисел с плавающей точкой
             worker_stock.append(WorkerStockItem(
@@ -727,18 +742,19 @@ def get_worker_stock(current_user: Annotated[dict, Depends(get_current_user)], w
 
 @app.post("/actions/write-off-item/", response_model=StockMovement, summary="Списать товар, числящийся за работником", tags=["Операции"])
 def write_off_item_from_worker(current_user: Annotated[dict, Depends(get_current_user)], request: WriteOffItemRequest, session: Session = Depends(get_session)):
+    validate_quantity(request.quantity)
     product = get_db_object_or_404(Product, request.product_id, session)
     worker = get_db_object_or_404(Worker, request.worker_id, session)
-
-    if request.quantity <= 0:
-        raise HTTPException(
-            status_code=400, detail="Количество для списания должно быть больше нуля.")
 
     # Рассчитываем текущий баланс на руках у работника
     current_on_hand_sum = session.exec(select(func.coalesce(func.sum(StockMovement.quantity), 0)).where(
         StockMovement.worker_id == request.worker_id,
         StockMovement.product_id == request.product_id
     )).one()
+    
+    if current_on_hand_sum is None or math.isnan(current_on_hand_sum):
+        current_on_hand_sum = 0.0
+        
     quantity_on_hand = -float(current_on_hand_sum)
 
     # Проверяем, достаточно ли товара для списания
@@ -746,16 +762,15 @@ def write_off_item_from_worker(current_user: Annotated[dict, Depends(get_current
         raise HTTPException(
             status_code=400, detail=f"У работника на руках только {quantity_on_hand:.2f} шт. Нельзя списать {request.quantity:.2f} шт.")
 
-    # ГАРАНТИРУЕМ, ЧТО СПИСАНИЕ БУДЕТ ПОЛОЖИТЕЛЬНЫМ ЧИСЛОМ, ИСПОЛЬЗУЯ abs()
-    # Это ключевое изменение для исправления бага.
-    write_off_quantity = abs(request.quantity)
+    # ГАРАНТИРУЕМ, ЧТО СПИСАНИЕ БУДЕТ ПОЛОЖИТЕЛЬНЫМ ЧИСЛОМ
+    write_off_quantity = request.quantity
 
     movement = StockMovement(
         product_id=request.product_id,
         worker_id=request.worker_id,
         quantity=write_off_quantity,  # Используем гарантированно положительное значение
         type=MovementTypeEnum.WRITE_OFF_WORKER,
-        stock_after=product.stock_quantity  # Остаток на общем складе не меняется
+        stock_after=product.stock_quantity if not math.isnan(product.stock_quantity) else 0.0 # Остаток на общем складе не меняется, но сохраняем актуальный
     )
 
     # Добавляем лог для отладки, чтобы видеть, что именно сохраняется в БД
@@ -2427,3 +2442,201 @@ def get_dashboard_summary(current_user: Annotated[dict, Depends(get_current_user
         profit_last_30_days=round(total_profit, 2),
         drilling_profit_last_30_days=round(drilling_total, 2)
     )
+
+
+# --- Эндпоинты для Администрирования (Backup) ---
+@app.get("/admin/backup", summary="Скачать бэкап базы данных", tags=["Администрирование"])
+def download_backup(current_user: Annotated[dict, Depends(get_current_user)], session: Session = Depends(get_session)):
+    import json
+    
+    backup_data = {
+        "timestamp": datetime.utcnow().isoformat(),
+        "products": [p.model_dump(mode='json') for p in session.exec(select(Product)).all()],
+        "workers": [w.model_dump(mode='json') for w in session.exec(select(Worker)).all()],
+        "stock_movements": [m.model_dump(mode='json') for m in session.exec(select(StockMovement)).all()],
+        "estimates": [e.model_dump(mode='json') for e in session.exec(select(Estimate)).all()],
+        "estimate_items": [ei.model_dump(mode='json') for ei in session.exec(select(EstimateItem)).all()],
+        "contracts": [c.model_dump(mode='json') for c in session.exec(select(Contract)).all()]
+    }
+    
+    filename = f"backup_sklad_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
+    json_str = json.dumps(backup_data, ensure_ascii=False, indent=2)
+    
+    return Response(
+        content=json_str,
+        media_type="application/json",
+        headers={"Content-Disposition": f"attachment; filename={filename}"}
+    )
+
+
+# --- AI Chat Endpoint ---
+from ai_chat import ai_assistant
+
+class AIChatRequest(BaseModel):
+    message: str
+
+class AIChatResponse(BaseModel):
+    response: str
+    function_results: List[dict] = []
+
+@app.post("/ai/chat", response_model=AIChatResponse, summary="AI-ассистент", tags=["AI"])
+def ai_chat(current_user: Annotated[dict, Depends(get_current_user)], request: AIChatRequest, session: Session = Depends(get_session)):
+    """
+    AI-ассистент для управления складом через естественный язык.
+    Примеры команд:
+    - "Добавь товар кабель 100 метров цена 50 рублей"
+    - "Найди все товары с низким остатком"
+    - "Выдай работнику Петров кабель 15 метров"
+    """
+    if not ai_assistant.model:
+        raise HTTPException(status_code=503, detail="AI-чат не настроен. Добавьте GEMINI_API_KEY в .env файл")
+    
+    # Получаем ответ от AI
+    ai_response = ai_assistant.process_message(request.message)
+    
+    function_results = []
+    
+    # Выполняем function calls, если есть
+    for fc in ai_response.get("function_calls", []):
+        func_name = fc["name"]
+        func_args = fc["args"]
+        
+        try:
+            if func_name == "create_product":
+                # Генерируем internal_sku
+                import random
+                import string
+                sku = ''.join(random.choices(string.ascii_uppercase + string.digits, k=8))
+                
+                product = Product(
+                    name=func_args["name"],
+                    internal_sku=sku,
+                    stock_quantity=float(func_args.get("stock_quantity", 0)),
+                    purchase_price=float(func_args.get("purchase_price", 0)),
+                    retail_price=float(func_args.get("retail_price", 0)),
+                    min_stock_level=float(func_args.get("min_stock_level", 0)),
+                    unit=UnitEnum(func_args.get("unit", "шт."))
+                )
+                session.add(product)
+                session.commit()
+                session.refresh(product)
+                
+                function_results.append({
+                    "function": func_name,
+                    "success": True,
+                    "result": f"Товар '{product.name}' добавлен (ID: {product.id})"
+                })
+            
+            elif func_name == "search_products":
+                query = func_args.get("query", "")
+                products = session.exec(
+                    select(Product).where(
+                        Product.is_deleted == False,
+                        or_(
+                            Product.name.ilike(f"%{query}%"),
+                            Product.internal_sku.ilike(f"%{query}%")
+                        )
+                    ).limit(5)
+                ).all()
+                
+                results = [{"name": p.name, "stock": p.stock_quantity, "unit": p.unit.value} for p in products]
+                function_results.append({
+                    "function": func_name,
+                    "success": True,
+                    "result": f"Найдено {len(products)} товаров: " + ", ".join([p.name for p in products])
+                })
+            
+            elif func_name == "issue_to_worker":
+                # Находим товар
+                product = session.exec(
+                    select(Product).where(
+                        Product.name.ilike(f"%{func_args['product_name']}%"),
+                        Product.is_deleted == False
+                    )
+                ).first()
+                
+                if not product:
+                    function_results.append({
+                        "function": func_name,
+                        "success": False,
+                        "result": f"Товар '{func_args['product_name']}' не найден"
+                    })
+                    continue
+                
+                # Находим работника
+                worker = session.exec(
+                    select(Worker).where(Worker.name.ilike(f"%{func_args['worker_name']}%"))
+                ).first()
+                
+                if not worker:
+                    function_results.append({
+                        "function": func_name,
+                        "success": False,
+                        "result": f"Работник '{func_args['worker_name']}' не найден"
+                    })
+                    continue
+                
+                quantity = float(func_args["quantity"])
+                
+                if product.stock_quantity < quantity:
+                    function_results.append({
+                        "function": func_name,
+                        "success": False,
+                        "result": f"Недостаточно товара. В наличии: {product.stock_quantity}"
+                    })
+                    continue
+                
+                product.stock_quantity -= quantity
+                movement = StockMovement(
+                    product_id=product.id,
+                    worker_id=worker.id,
+                    quantity=-quantity,
+                    type=MovementTypeEnum.ISSUE_TO_WORKER,
+                    stock_after=product.stock_quantity
+                )
+                session.add(product)
+                session.add(movement)
+                session.commit()
+                
+                function_results.append({
+                    "function": func_name,
+                    "success": True,
+                    "result": f"Выдано {quantity} {product.unit.value} '{product.name}' работнику {worker.name}"
+                })
+            
+            elif func_name == "get_low_stock_products":
+                products = session.exec(
+                    select(Product).where(
+                        Product.is_deleted == False,
+                        Product.min_stock_level > 0,
+                        Product.stock_quantity <= Product.min_stock_level
+                    )
+                ).all()
+                
+                if products:
+                    result_text = "Товары с низким остатком:\n" + "\n".join([
+                        f"- {p.name}: {p.stock_quantity} {p.unit.value} (мин: {p.min_stock_level})"
+                        for p in products
+                    ])
+                else:
+                    result_text = "Все товары в норме"
+                
+                function_results.append({
+                    "function": func_name,
+                    "success": True,
+                    "result": result_text
+                })
+        
+        except Exception as e:
+            logger.error(f"Error executing function {func_name}: {e}")
+            function_results.append({
+                "function": func_name,
+                "success": False,
+                "result": f"Ошибка: {str(e)}"
+            })
+    
+    return AIChatResponse(
+        response=ai_response.get("response", ""),
+        function_results=function_results
+    )
+

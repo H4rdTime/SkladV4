@@ -2,7 +2,8 @@
 'use client';
 import Link from 'next/link';
 import toast from 'react-hot-toast';
-import { Warehouse, Users, FileText, BookUser, Trash2, History, ClipboardList, LayoutDashboard, X, Menu, LineChart, Hammer, ShoppingCart } from 'lucide-react'; // Добавил иконки
+import Cookies from 'js-cookie';
+import { Warehouse, Users, FileText, BookUser, Trash2, History, ClipboardList, LayoutDashboard, X, Menu, LineChart, Hammer, ShoppingCart, Download } from 'lucide-react';
 import { useState } from 'react';
 
 const NavLink = ({ href, children, onClose }: { href: string, children: React.ReactNode, onClose: () => void }) => {
@@ -21,6 +22,44 @@ export default function ProtectedLayout({ children }: { children: React.ReactNod
     const API_URL = process.env.NEXT_PUBLIC_API_URL;
 
     const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
+
+    const handleDownloadBackup = async () => {
+        const toastId = toast.loading('Подготовка бэкапа...');
+        try {
+            const token = Cookies.get('accessToken');
+            if (!token) {
+                throw new Error('Необходимо войти в систему');
+            }
+            const response = await fetch(`${API_URL}/admin/backup`, {
+                method: 'GET',
+                headers: {
+                    'Authorization': `Bearer ${token}`
+                }
+            });
+            if (!response.ok) {
+                throw new Error('Не удалось скачать бэкап');
+            }
+            const blob = await response.blob();
+            const url = window.URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            const contentDisposition = response.headers.get('Content-Disposition');
+            let filename = 'backup.json';
+            if (contentDisposition) {
+                const filenameMatch = contentDisposition.match(/filename="?([^"]+)"?/);
+                if (filenameMatch && filenameMatch.length === 2)
+                    filename = filenameMatch[1];
+            }
+            a.download = filename;
+            document.body.appendChild(a);
+            a.click();
+            window.URL.revokeObjectURL(url);
+            document.body.removeChild(a);
+            toast.success('Бэкап успешно скачан', { id: toastId });
+        } catch (err: any) {
+            toast.error(`Ошибка: ${err.message}`, { id: toastId });
+        }
+    };
 
     const handleClearData = async () => {
         if (confirm('!!! ВНИМАНИЕ !!!\n\nВы уверены, что хотите удалить ВСЕ данные (товары, сметы, договоры, историю)?\n\nЭто действие НЕОБРАТИМО.')) {
@@ -81,8 +120,7 @@ export default function ProtectedLayout({ children }: { children: React.ReactNod
                         <Users size={20} />
                         <span>На руках</span>
                     </NavLink>
-                    
-                    {/* --- ИЗМЕНЕНИЯ ЗДЕСЬ --- */}
+
                     {/* Разделитель для секции отчетов */}
                     <div className="pt-2">
                         <span className="px-3 text-xs font-semibold uppercase text-gray-500">Отчеты</span>
@@ -98,7 +136,11 @@ export default function ProtectedLayout({ children }: { children: React.ReactNod
                     </NavLink>
 
                 </nav>
-                <div className="p-4 border-t">
+                <div className="p-4 border-t space-y-2">
+                    <button onClick={handleDownloadBackup} className="w-full flex items-center justify-center gap-2 px-3 py-2 text-blue-600 bg-blue-50 rounded-md hover:bg-blue-100 hover:text-blue-800 transition-colors">
+                        <Download size={16} />
+                        <span>Скачать бэкап</span>
+                    </button>
                     <button onClick={handleClearData} className="w-full flex items-center justify-center gap-2 px-3 py-2 text-red-600 bg-red-50 rounded-md hover:bg-red-100 hover:text-red-800 transition-colors">
                         <Trash2 size={16} />
                         <span>Очистить БД</span>

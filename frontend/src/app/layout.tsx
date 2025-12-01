@@ -4,8 +4,9 @@
 import { Inter } from "next/font/google";
 import "./globals.css";
 import { Toaster } from 'react-hot-toast';
-import { usePathname } from 'next/navigation'; // Импортируем хук
-import ProtectedLayout from "@/components/ProtectedLayout"; // Импортируем наш новый компонент
+import { usePathname } from 'next/navigation';
+import ProtectedLayout from "@/components/ProtectedLayout";
+import AiChat from "@/components/AiChat";
 
 const inter = Inter({ subsets: ["latin"] });
 
@@ -14,7 +15,7 @@ export default function RootLayout({
 }: Readonly<{
   children: React.ReactNode;
 }>) {
-  const pathname = usePathname(); // Получаем текущий URL
+  const pathname = usePathname();
   const isLoginPage = pathname === '/login';
 
   return (
@@ -24,16 +25,17 @@ export default function RootLayout({
       </head>
       <body className={`${inter.className} bg-gray-50`}>
         <Toaster position="bottom-right" toastOptions={{ duration: 5000 }} />
-        
+
         {isLoginPage ? (
-            // Если это страница логина, показываем только ее содержимое
-            children
+          children
         ) : (
-            // Для всех остальных страниц оборачиваем их в наш layout с меню
-            <ProtectedLayout>
-                {children}
-            </ProtectedLayout>
+          <ProtectedLayout>
+            {children}
+          </ProtectedLayout>
         )}
+
+        {/* AI Chat - доступен на всех страницах кроме логина */}
+        {!isLoginPage && <AiChat />}
       </body>
     </html>
   );

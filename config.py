@@ -34,3 +34,6 @@ try:
     MIN_WELL_COST = float(os.getenv("MIN_WELL_COST", "75000"))
 except ValueError:
     MIN_WELL_COST = 75000.0
+
+# Gemini API key для AI-чата (опционально)
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
