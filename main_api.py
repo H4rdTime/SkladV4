@@ -524,25 +524,24 @@ def read_products(
 
     # --- ИСПРАВЛЕНИЕ ОШИБКИ NaN ---
     # Пробегаемся по всем найденным товарам и чиним "сломанные" числа перед отправкой
+    cleaned_items = []
     for item in items:
-        # Проверяем количество
-        if item.stock_quantity is not None and (math.isnan(item.stock_quantity) or math.isinf(item.stock_quantity)):
-            item.stock_quantity = 0.0
-
-        # Проверяем цену закупа
-        if item.purchase_price is not None and (math.isnan(item.purchase_price) or math.isinf(item.purchase_price)):
-            item.purchase_price = 0.0
-
-        # Проверяем розничную цену
-        if item.retail_price is not None and (math.isnan(item.retail_price) or math.isinf(item.retail_price)):
-            item.retail_price = 0.0
-
-        # Проверяем мин. остаток
-        if item.min_stock_level is not None and (math.isnan(item.min_stock_level) or math.isinf(item.min_stock_level)):
-            item.min_stock_level = 0.0
+        # Преобразуем в словарь, чтобы гарантированно очистить данные
+        item_dict = item.model_dump()
+        
+        # Список полей типа float в модели Product, которые могут быть NaN
+        float_fields = ['stock_quantity', 'purchase_price', 'retail_price', 'min_stock_level']
+        
+        for field in float_fields:
+            val = item_dict.get(field)
+            if val is not None and isinstance(val, float) and (math.isnan(val) or math.isinf(val)):
+                logger.warning(f"Product ID={item_dict.get('id')}: Field '{field}' is {val}. Resetting to 0.0")
+                item_dict[field] = 0.0
+        
+        cleaned_items.append(item_dict)
     # ------------------------------
 
-    return ProductPage(total=total_count, items=items)
+    return ProductPage(total=total_count, items=cleaned_items)
 
 
 @app.patch("/products/{product_id}", response_model=Product, summary="Обновить товар", tags=["Товары"])
