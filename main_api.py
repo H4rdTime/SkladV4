@@ -519,7 +519,29 @@ def read_products(
     total_count = session.exec(count_query).one()
     paginated_query = query.offset(offset).limit(
         size).order_by(Product.is_favorite.desc(), Product.name)
+
     items = session.exec(paginated_query).all()
+
+    # --- ИСПРАВЛЕНИЕ ОШИБКИ NaN ---
+    # Пробегаемся по всем найденным товарам и чиним "сломанные" числа перед отправкой
+    for item in items:
+        # Проверяем количество
+        if item.stock_quantity is not None and (math.isnan(item.stock_quantity) or math.isinf(item.stock_quantity)):
+            item.stock_quantity = 0.0
+
+        # Проверяем цену закупа
+        if item.purchase_price is not None and (math.isnan(item.purchase_price) or math.isinf(item.purchase_price)):
+            item.purchase_price = 0.0
+
+        # Проверяем розничную цену
+        if item.retail_price is not None and (math.isnan(item.retail_price) or math.isinf(item.retail_price)):
+            item.retail_price = 0.0
+
+        # Проверяем мин. остаток
+        if item.min_stock_level is not None and (math.isnan(item.min_stock_level) or math.isinf(item.min_stock_level)):
+            item.min_stock_level = 0.0
+    # ------------------------------
+
     return ProductPage(total=total_count, items=items)
 
 
@@ -645,7 +667,8 @@ def receive_item_on_stock(current_user: Annotated[dict, Depends(get_current_user
     """Увеличивает остаток товара и создаёт движение типа INCOME."""
     product = get_db_object_or_404(Product, request.product_id, session)
     if request.quantity <= 0:
-        raise HTTPException(status_code=400, detail="Количество должно быть > 0")
+        raise HTTPException(
+            status_code=400, detail="Количество должно быть > 0")
 
     # Обновляем остаток
     product.stock_quantity = (product.stock_quantity or 0) + request.quantity
@@ -754,11 +777,16 @@ class HistoryPage(BaseModel):
 @app.get("/actions/history/", response_model=HistoryPage, summary="Получить историю всех движений", tags=["Операции"])
 def get_history(
     current_user: Annotated[dict, Depends(get_current_user)],
-    search: Optional[str] = Query(None, description="Поиск по названию товара или имени работника"),
-    worker_id: Optional[int] = Query(None, description="Фильтр по ID работника"),
-    movement_type: Optional[str] = Query(None, description="Фильтр по типу движения (например: INCOME, ISSUE_TO_WORKER)"),
-    start_date: Optional[date] = Query(None, description="Начальная дата (включительно)"),
-    end_date: Optional[date] = Query(None, description="Конечная дата (включительно)"),
+    search: Optional[str] = Query(
+        None, description="Поиск по названию товара или имени работника"),
+    worker_id: Optional[int] = Query(
+        None, description="Фильтр по ID работника"),
+    movement_type: Optional[str] = Query(
+        None, description="Фильтр по типу движения (например: INCOME, ISSUE_TO_WORKER)"),
+    start_date: Optional[date] = Query(
+        None, description="Начальная дата (включительно)"),
+    end_date: Optional[date] = Query(
+        None, description="Конечная дата (включительно)"),
     page: int = Query(1, gt=0),
     size: int = Query(50, gt=0, le=500),
     session: Session = Depends(get_session)
@@ -794,7 +822,8 @@ def get_history(
             )
         )).all()
         # find matching workers
-        worker_ids = session.exec(select(Worker.id).where(Worker.name.ilike(term))).all()
+        worker_ids = session.exec(
+            select(Worker.id).where(Worker.name.ilike(term))).all()
 
         # If nothing matches, return empty list early
         if not prod_ids and not worker_ids:
@@ -1235,7 +1264,8 @@ def read_estimate(current_user: Annotated[dict, Depends(get_current_user)], esti
             product_name=item.product.name if item.product and not item.product.is_deleted else "Товар удален"
         ))
 
-    total_sum = raw_total if not (math.isnan(raw_total) or math.isinf(raw_total)) else 0.0
+    total_sum = raw_total if not (math.isnan(
+        raw_total) or math.isinf(raw_total)) else 0.0
     return EstimateResponse(**estimate.model_dump(), items=response_items, total_sum=total_sum)
 
 
@@ -1376,7 +1406,8 @@ def update_estimate_item(current_user: Annotated[dict, Depends(get_current_user)
 
     estimate = get_db_object_or_404(Estimate, estimate_id, session)
     if estimate.status == EstimateStatusEnum.COMPLETED:
-        raise HTTPException(status_code=400, detail="Нельзя редактировать позицию завершенной сметы.")
+        raise HTTPException(
+            status_code=400, detail="Нельзя редактировать позицию завершенной сметы.")
 
     if quantity is not None:
         item.quantity = quantity
@@ -1535,10 +1566,12 @@ def cancel_in_progress_estimate(
     estimate = get_db_object_or_404(Estimate, estimate_id, session)
 
     if estimate.status != EstimateStatusEnum.IN_PROGRESS:
-        raise HTTPException(status_code=400, detail="Можно отменить только смету в статусе 'В работе'.")
+        raise HTTPException(
+            status_code=400, detail="Можно отменить только смету в статусе 'В работе'.")
 
     if not estimate.worker_id:
-        raise HTTPException(status_code=400, detail="Не найден работник, на которого была отгружена смета. Отмена невозможна.")
+        raise HTTPException(
+            status_code=400, detail="Не найден работник, на которого была отгружена смета. Отмена невозможна.")
 
     # Возвращаем товары со сметы обратно на основной склад и создаём движения возврата
     for item in estimate.items:
@@ -1573,7 +1606,8 @@ def reopen_cancelled_estimate(
     estimate = get_db_object_or_404(Estimate, estimate_id, session)
 
     if estimate.status != EstimateStatusEnum.CANCELLED:
-        raise HTTPException(status_code=400, detail="Можно восстановить только отменённую смету.")
+        raise HTTPException(
+            status_code=400, detail="Можно восстановить только отменённую смету.")
 
     worker = get_db_object_or_404(Worker, worker_id, session)
 
@@ -1581,7 +1615,8 @@ def reopen_cancelled_estimate(
     for item in estimate.items:
         product = get_db_object_or_404(Product, item.product_id, session)
         if product.stock_quantity < item.quantity:
-            raise HTTPException(status_code=400, detail=f"Недостаточно товара на складе: {product.name}")
+            raise HTTPException(
+                status_code=400, detail=f"Недостаточно товара на складе: {product.name}")
         product.stock_quantity -= item.quantity
         movement = StockMovement(product_id=item.product_id, worker_id=worker.id, quantity=-item.quantity,
                                  type=MovementTypeEnum.ISSUE_TO_WORKER, stock_after=product.stock_quantity)
@@ -2155,7 +2190,8 @@ def get_profit_report_details(
     product_ids = [it.product_id for it in estimate.items]
     products = []
     if product_ids:
-        products = session.exec(select(Product).where(Product.id.in_(product_ids))).all()
+        products = session.exec(select(Product).where(
+            Product.id.in_(product_ids))).all()
     product_map = {p.id: p for p in products}
 
     items: List[ProfitDetailItem] = []
@@ -2164,7 +2200,8 @@ def get_profit_report_details(
 
     for it in estimate.items:
         product = product_map.get(it.product_id)
-        purchase_price = float(product.purchase_price) if product and product.purchase_price is not None else 0.0
+        purchase_price = float(
+            product.purchase_price) if product and product.purchase_price is not None else 0.0
         unit_price = float(it.unit_price or 0.0)
         quantity = float(it.quantity or 0.0)
 
@@ -2288,11 +2325,11 @@ def get_dashboard_summary(current_user: Annotated[dict, Depends(get_current_user
             Product.stock_quantity <= Product.min_stock_level
         )
     ).one()
-    
+
     estimates_in_progress_count = session.exec(select(func.count(Estimate.id)).where(
         Estimate.status == EstimateStatusEnum.IN_PROGRESS
     )).one()
-    
+
     contracts_in_progress_count = session.exec(select(func.count(Contract.id)).where(
         Contract.status == ContractStatusEnum.IN_PROGRESS
     )).one()
@@ -2304,10 +2341,12 @@ def get_dashboard_summary(current_user: Annotated[dict, Depends(get_current_user
         Estimate.created_at >= thirty_days_ago
     )).all()
 
-    product_ids = {item.product_id for est in profit_estimates for item in est.items}
+    product_ids = {
+        item.product_id for est in profit_estimates for item in est.items}
     products_list = []
     if product_ids:
-        products_list = session.exec(select(Product).where(Product.id.in_(product_ids))).all()
+        products_list = session.exec(
+            select(Product).where(Product.id.in_(product_ids))).all()
     product_map = {p.id: p for p in products_list}
 
     total_profit = 0.0
@@ -2319,13 +2358,13 @@ def get_dashboard_summary(current_user: Annotated[dict, Depends(get_current_user
                 qty = float(item.quantity or 0)
                 price = float(item.unit_price or 0)
                 cost = float(product.purchase_price or 0)
-                
+
                 item_profit = (qty * price) - (qty * cost)
-                
+
                 # Если вдруг получился NaN (например 0 * inf), заменяем на 0
                 if math.isnan(item_profit) or math.isinf(item_profit):
                     item_profit = 0.0
-                
+
                 total_profit += item_profit
 
     # 3. Считаем прибыль по бурению за 30 дней
@@ -2335,25 +2374,31 @@ def get_dashboard_summary(current_user: Annotated[dict, Depends(get_current_user
         Contract.contract_date >= thirty_days_ago
     )
     drilling_contracts = session.exec(drilling_query).all()
-    
+
     drilling_total = 0.0
-    
+
     # Подгружаем цены на трубы один раз (чтобы не дергать базу в цикле)
-    steel_prod = session.exec(select(Product).where(Product.internal_sku == 'PIPE_STEEL_133_ST20')).first()
-    plastic_prod = session.exec(select(Product).where(Product.internal_sku == 'PIPE_PLASTIC_110_6_1')).first()
-    
-    steel_purchase = float(steel_prod.purchase_price) if steel_prod and steel_prod.purchase_price is not None else 0.0
-    steel_retail = float(steel_prod.retail_price) if steel_prod and steel_prod.retail_price is not None else 0.0
-    
-    plastic_purchase = float(plastic_prod.purchase_price) if plastic_prod and plastic_prod.purchase_price is not None else 0.0
-    plastic_retail = float(plastic_prod.retail_price) if plastic_prod and plastic_prod.retail_price is not None else 0.0
+    steel_prod = session.exec(select(Product).where(
+        Product.internal_sku == 'PIPE_STEEL_133_ST20')).first()
+    plastic_prod = session.exec(select(Product).where(
+        Product.internal_sku == 'PIPE_PLASTIC_110_6_1')).first()
+
+    steel_purchase = float(
+        steel_prod.purchase_price) if steel_prod and steel_prod.purchase_price is not None else 0.0
+    steel_retail = float(
+        steel_prod.retail_price) if steel_prod and steel_prod.retail_price is not None else 0.0
+
+    plastic_purchase = float(
+        plastic_prod.purchase_price) if plastic_prod and plastic_prod.purchase_price is not None else 0.0
+    plastic_retail = float(
+        plastic_prod.retail_price) if plastic_prod and plastic_prod.retail_price is not None else 0.0
 
     for c in drilling_contracts:
         price_soil = float(c.price_per_meter_soil or 0.0)
         price_rock = float(c.price_per_meter_rock or 0.0)
         meters_soil = float(c.actual_depth_soil or 0.0)
         meters_rock = float(c.actual_depth_rock or 0.0)
-        
+
         drilling_retail = price_soil * meters_soil + price_rock * meters_rock
 
         steel_m = float(c.pipe_steel_used or 0.0)
@@ -2363,16 +2408,18 @@ def get_dashboard_summary(current_user: Annotated[dict, Depends(get_current_user
         pipe_retail = steel_retail * steel_m + plastic_retail * plastic_m
 
         profit = (drilling_retail + pipe_retail) - (pipe_purchase)
-        
+
         # ГЛАВНОЕ ИСПРАВЛЕНИЕ: Проверка на NaN перед добавлением к общей сумме
         if math.isnan(profit) or math.isinf(profit):
             profit = 0.0
-            
+
         drilling_total += profit
 
     # Финальная проверка перед возвратом (на всякий случай)
-    if math.isnan(total_profit): total_profit = 0.0
-    if math.isnan(drilling_total): drilling_total = 0.0
+    if math.isnan(total_profit):
+        total_profit = 0.0
+    if math.isnan(drilling_total):
+        drilling_total = 0.0
 
     return DashboardSummary(
         products_to_order_count=products_to_order_count,
