@@ -42,6 +42,12 @@ export default function AiChat() {
             };
 
             setMessages(prev => [...prev, assistantMessage]);
+
+            // Если были успешные операции с товарами, диспатчим событие для обновления склада
+            const hasSuccessfulOperations = response.function_results?.some((fr: any) => fr.success);
+            if (hasSuccessfulOperations) {
+                window.dispatchEvent(new CustomEvent('ai-warehouse-update'));
+            }
         } catch (err: any) {
             toast.error(err.message || 'Ошибка AI: проверьте, что GEMINI_API_KEY установлен');
             const errorMessage: Message = {
@@ -105,8 +111,8 @@ export default function AiChat() {
                             >
                                 <div
                                     className={`max-w-[80%] p-3 rounded-lg ${msg.role === 'user'
-                                            ? 'bg-blue-600 text-white'
-                                            : 'bg-gray-100 text-gray-800'
+                                        ? 'bg-blue-600 text-white'
+                                        : 'bg-gray-100 text-gray-800'
                                         }`}
                                 >
                                     <p className="text-sm whitespace-pre-wrap">{msg.content}</p>

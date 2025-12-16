@@ -82,6 +82,17 @@ export default function WarehousePage() {
     return () => clearTimeout(debounceTimer);
   }, [searchTerm, currentPage]);
 
+  // Слушаем событие от AI-чата для автообновления
+  useEffect(() => {
+    const handleAiUpdate = () => {
+      console.log('AI warehouse update event received, refreshing...');
+      forceRefresh();
+    };
+
+    window.addEventListener('ai-warehouse-update', handleAiUpdate);
+    return () => window.removeEventListener('ai-warehouse-update', handleAiUpdate);
+  }, []);
+
   const handleToggleFavorite = async (productId: number) => {
     // Оптимистичное обновление: сразу меняем звездочку в интерфейсе, не дожидаясь ответа сервера
     const originalProducts = [...products];
@@ -171,7 +182,7 @@ export default function WarehousePage() {
     formData.append('auto_create_new', 'true');
     const toastId = toast.loading('Импорт файла...');
     try {
-    const result = await fetchApi('/actions/universal-import/', { method: 'POST', body: formData });
+      const result = await fetchApi('/actions/universal-import/', { method: 'POST', body: formData });
       toast.success(`Импорт завершен! Создано: ${result.created?.length || 0}, Обновлено: ${result.updated?.length || 0}`, { id: toastId, duration: 6000 });
       forceRefresh();
     } catch (err: any) {
@@ -199,7 +210,7 @@ export default function WarehousePage() {
               const restoreToastId = toast.loading('Восстановление...');
               try {
                 // --- ИЗМЕНЕНИЕ: Вызываем эндпоинт восстановления ---
-              await fetchApi(`/products/${productId}/restore`, { method: 'POST' });
+                await fetchApi(`/products/${productId}/restore`, { method: 'POST' });
                 toast.success("Товар восстановлен!", { id: restoreToastId });
                 forceRefresh();
               } catch (e) {
@@ -289,7 +300,7 @@ export default function WarehousePage() {
 
   const handleQuickCancel = (movementId: number) => {
     toast.promise(
-  fetchApi(`/actions/history/cancel/${movementId}`, { method: 'POST' }),
+      fetchApi(`/actions/history/cancel/${movementId}`, { method: 'POST' }),
       {
         loading: 'Отмена...',
         success: () => {
