@@ -113,7 +113,7 @@ class AIChatAssistant:
         try:
             genai.configure(api_key=self.api_key)
             self.model = genai.GenerativeModel(
-                'gemini-pro-latest',
+                'gemini-3-flash-preview',
                 tools=[tools_config],
                 system_instruction="""
 Ты - AI-ассистент системы управления складом "Склад v4". 
