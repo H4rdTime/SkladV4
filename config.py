@@ -25,7 +25,7 @@ ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRE_MINUTES = 60 * 24 * 7  # 7 дней
 
 # Загружаем CORS origins и преобразуем в список
-cors_origins_str = os.getenv("CORS_ORIGINS", "http://localhost:3000,http://127.0.0.1:3000")
+cors_origins_str = os.getenv("CORS_ORIGINS", "http://localhost:3000,http://127.0.0.1:3000,https://sklad-v4.vercel.app")
 CORS_ORIGINS = [origin.strip() for origin in cors_origins_str.split(',')]
 
 # Минимальная стоимость готовой к эксплуатации скважины (руб.)
